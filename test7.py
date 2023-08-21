@@ -33,9 +33,8 @@ def sphere(size, texture):
     return x0, y0, z0
 
 
-
 texture = np.asarray(Image.open('earthmap1k.jpg'))
 x, y, z = sphere(1, texture)
-surf = go.Surface(x=x, y=y, z=z, surfacecolor=...)
+surf = go.Surface(x=x, y=y, z=z, surfacecolor=texture, colorscale=colorscale)
 fig = go.Figure(data=[surf])
 pio.show(fig)
