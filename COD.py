@@ -98,10 +98,14 @@ class GroundStation_:
 # def ionosphericModel(self):
 
 
-class COD_():
+class ssEnvironmentBuilder():
 
     def __init__(self):
         super().__init__()
+
+        self.utc = TimeScalesFactory.getUTC()
+        self.startTime = AbsoluteDate(2022, 10, 3, 8, 30, 0.0, self.utc)
+        self.endTime = AbsoluteDate(2022, 10, 3, 8, 50, 0.0, self.utc)
         self.RAD2DEG = (180 / np.pi)
         self.DEG2RAD = (np.pi / 180)
         self.rangeMaxError = 0.001
@@ -110,13 +114,51 @@ class COD_():
         self.groundStationsList = []
         self.numberOfGroundStation = 0
         self.spacecraftsList = []
+        self.propagatorsList = []
+        self.referenceOrbit = []
         self.isTwoWay = True
         self.ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, IERSConventions.IERS_2010, True)
         self.eciFrame = FramesFactory.getGCRF()
         self.wgs84Ellipsoid = ReferenceEllipsoid.getWgs84(self.ecefFrame)
+        self.moon = CelestialBodyFactory.getMoon()
+        self.sun = CelestialBodyFactory.getSun()  
+        # Orbit propagator parameters
+        self.propagationMinTimeStep = 0.01  # s
+        self.propagationMaxTimeStep = 2.0  # stimestep
+        self.vectorAbsoluteTolerance = 3.0  # m
+        self.vectorRelativeTolerance = 3.0 # m
 
-    def inter(self):
-        pass
+
+        self.elevationMask = 10.0  # in degrees
+
+        self.earthMapColorScale =[[0.0, 'rgb(30, 59, 117)'],
+                 [0.1, 'rgb(46, 68, 21)'],
+                 [0.2, 'rgb(74, 96, 28)'],
+                 [0.3, 'rgb(115,141,90)'],
+                 [0.4, 'rgb(122, 126, 75)'],
+                 [0.6, 'rgb(122, 126, 75)'],
+                 [0.7, 'rgb(141,115,96)'],
+                 [0.8, 'rgb(223, 197, 170)'],
+                 [0.9, 'rgb(237,214,183)'],
+                 [1.0, 'rgb(255, 255, 255)']]
+        
+
+        # referenceDate = AbsoluteDate.J2000_EPOCH  # reference date
+        # mjdUtcEpoch = AbsoluteDate(1858, 11, 17, 0, 0, 0.0, utc)
+
+    def addReferenceOrbit(self, altitude, eccentricity, inclination, raan, aop, trueAnomaly):
+        self.referenceOrbit = []
+        self.referenceOrbit = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + altitude,  # Semimajor Axis (m)
+                                      eccentricity,  # Eccentricity
+                                      inclination * np.pi / 180,  # Inclination (radians)
+                                      aop * np.pi / 180,  # Perigee argument (radians)
+                                      raan * np.pi / 180,  # Right ascension of ascending node (radians)
+                                      trueAnomaly * np.pi / 180,  # Anomaly (rad/s)
+                                      PositionAngle.TRUE,  # Sets which type of anomaly we use
+                                      self.eciFrame,
+                                      # The frame in which the parameters are defined (must be a pseudo-inertial frame)
+                                      self.startTime,  # Sets the date of the orbital parameters
+                                      Constants.WGS84_EARTH_MU)  # Sets the central attraction coefficient (m³/s²)
 
     def addGroundStation(self, latitude, longitude, altitude, name):
         stationPoint = GeodeticPoint(latitude * self.DEG2RAD, longitude * self.DEG2RAD, altitude)
@@ -205,15 +247,20 @@ class COD_():
 
         return rangeMeasurementsList
 
-    def ExGetPropagator(propagatorType,
-                        initialOrbit, mass,
-                        eciFrame, ecefFrame,
-                        level, minStep, maxStep,
-                        vecAbsoluteTolerance, vecRelativeTolerance):
+    def getPropagator(self, propagatorType, initialOrbit, mass, level):
 
-        moon = CelestialBodyFactory.getMoon()
-        sun = CelestialBodyFactory.getSun()
-        wgs84Ellipsoid = ReferenceEllipsoid.getWgs84(ecefFrame)
+        eciFrame = self.eciFrame
+        ecefFrame = self.ecefFrame
+        minStep = self.propagationMaxTimeStep
+        maxStep = self.propagationMaxTimeStep
+        vecAbsoluteTolerance = self.vectorAbsoluteTolerance
+        vecRelativeTolerance = self.vectorRelativeTolerance
+
+
+
+        moon = self.moon
+        sun = self.sun
+        wgs84Ellipsoid = self.wgs84Ellipsoid
         nadirPointing = NadirPointing(eciFrame, wgs84Ellipsoid)
 
         initialCartesianOrbit = CartesianOrbit(SpacecraftState(initialOrbit, mass).getPVCoordinates(eciFrame),
@@ -335,15 +382,80 @@ class COD_():
             satPropagator.addForceModel(solidTidess)
 
         return satPropagator
+    
 
-    def ExBuildWalker( num_plane, num_sat, F, refSat, activeSats):
+    def rearangeTexture(self, texture):
+        N_lat = int(texture.shape[0])
+        N_lon = int(texture.shape[1])
+        newTexture = np.zeros([N_lat, N_lon], dtype=np.uint8)
+        newTexture[:1024] = texture[1024:]
+        newTexture[1024:] = texture[:1024]
+        return newTexture
+
+
+    def sphereGenerator(self, size, texture): 
+        N_lat = int(texture.shape[0])
+        N_lon = int(texture.shape[1])
+        theta = np.linspace(0,2*np.pi,N_lat)
+        phi = np.linspace(0,np.pi,N_lon)
+        
+        # Set up coordinates for points on the sphere
+        x0 = size * np.outer(np.cos(theta),np.sin(phi))
+        y0 = size * np.outer(np.sin(theta),np.sin(phi))
+        z0 = size * np.outer(np.ones(N_lat),np.cos(phi))
+        
+        # Set up trace
+        return x0,y0,z0
+    
+    def getBlueMarbleFigure(self, path):
+        earthMapTextureT = np.asarray(Image.open(path.format('earth'))).T
+        earthMapTexture = self.rearangeTexture(earthMapTextureT)
+
+        earthSphereX,earthSphereY,earthSphereZ =\
+              self.sphereGenerator(Constants.WGS84_EARTH_EQUATORIAL_RADIUS,earthMapTexture)
+        earhtMarbleSurf = go.Surface(x=earthSphereX, y=earthSphereY, z=earthSphereZ,
+                  surfacecolor=earthMapTexture,
+                  colorscale= mainScenario.earthMapColorScale) 
+
+        earhtMarbleFigure = go.Figure(data=[earhtMarbleSurf])
+
+        return earhtMarbleFigure
+    
+
+    def ExBuildWalker( num_plane, num_sat, F, refSat):
+        # allsat = [[0 for i in range(num_sat)] for i in range(num_plane)]
+        orbits = []
+        raan0 = refSat.getRightAscensionOfAscendingNode() * ( 180.0 / np.pi )
+        ta0 = refSat.getTrueAnomaly() * ( 180.0 / np.pi )
+        for i in range(num_plane):
+            for j in range(num_sat):
+                raan = raan0 + i * 360.0 / num_plane
+                ta = ta0 + j * 360.0 / num_sat + i * 360 * F / (num_sat * num_plane)
+                ta = ta % 360.0
+                if ta >= 180.0:
+                    ta -= 360.0
+                if raan > 360.0:
+                    raan -= 360.0
+                newOrbit = KeplerianOrbit(refSat.getA(), refSat.getE(), refSat.getI(), 
+                                          refSat.getPerigeeArgument(), raan * (np.pi / 180.0), 
+                                          ta * ( np.pi / 180 ), PositionAngle.TRUE,
+                                           refSat.getFrame(), refSat.getPVCoordinates().getDate(), 
+                                           Constants.WGS84_EARTH_MU)
+
+                orbits.append(newOrbit)
+        return orbits
+
+    def buildISLStar(self, num_plane, num_sat, F, activeSats):
+        
         '''
+        ** reference satellite must be assigned before calling this method!!!
         inputs: number of plane: int
                 number of satellites per plane: int
                 walker phasing parameter: int (between zero and np-1)
                 reference satellite: orekit KeplerianOrbit
                 list of satellites with ISL link: list[dtype=int] length(between 1 and np*ns)
         '''
+        refSat = self.referenceOrbit
         # allsat = [[0 for i in range(num_sat)] for i in range(num_plane)]
         nominalLinksList = np.zeros([len(activeSats),4],dtype=int)
         allContributedSatellitesList = []
@@ -357,8 +469,7 @@ class COD_():
                 raan = raan0 + i * 180.0 / num_plane
                 ta = ta0 + j * 360.0 / num_sat + i * 360 * F / (num_sat * num_plane)
                 ta = ta % 360.0
-                #if ta >= 180.0:
-                #    ta -= 360.0
+
                 if raan > 180.0:
                     raan -= 180.0
                 newOrbit = KeplerianOrbit(refSat.getA(), refSat.getE(), refSat.getI(),
@@ -422,231 +533,75 @@ class MyObserver(PythonBatchLSObserver):
         print(itCounts)
 
 
-"""
-# ###################################################################################
-# ###################################################################################
-##########  Test Area ##############**********************************
+
+# building scenario
+mainScenario = ssEnvironmentBuilder()
+
+mainScenario.addReferenceOrbit(700000.0, 0.0, 89.0, 0.0, 0.0, 0.0)
+
+mainScenario.addGroundStation(30.0, 48.5, 0.0, "Boushehr")
+mainScenario.addGroundStation(35.0, 51.0, 0.0, "Tehran")
+#### mainScenario.addGroundStation(30.0, 50.0, 0.0, "Boushehr")
+#### mainScenario.addGroundStation(33.0, 48.0, 1500.0, "Aleshtar")
+# mainScenario.addGroundStation(25.0, 59.0, 0.0, "Bandar Abbas")
+# mainScenario.addGroundStation(35.0, 58.0, 0.0, "Mashhad")
+# mainScenario.addGroundStation(38.0, 46.0, 0.0, "Tabriz")
+# mainScenario.addGroundStation(27.0, 63.0, 0.0, "Sistan")
+
+underODSatellites = [30]
+starConstellation, activeSatellites, selectedOrbitsIndexes, linkList = \
+    mainScenario.buildISLStar( 15, 28, 1, underODSatellites)
 
 
-utc = TimeScalesFactory.getUTC()
-#startTime = AbsoluteDate(2022, 10, 3, 8, 30, 0.0, utc)
-eciFrame = FramesFactory.getGCRF()
-ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, IERSConventions.IERS_2010, True)
-
-
-
-#refsat_test = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + 500000.0,
-#                0.0 , 78.0*np.pi/180, 
-#                0.0*np.pi/180,  180.0*np.pi/180 ,  25.0*np.pi/180,  PositionAngle.TRUE,
-#                eciFrame,  startTime, Constants.WGS84_EARTH_MU)
-
-#cons = COD_().ExBuildWalker(25, 13, 1, refsat_test)
-
-with open('S1A_OPER_AUX_RESORB_OPOD_20220103T002736_V20220102T202842_20220102T234612.EOF', 'r') as ephfile:
-    sentineldata = ephfile.read()
-
-Bs_sentineldata = BeautifulSoup(sentineldata, "xml")
-b_unique = Bs_sentineldata.find_all('OSV')
-position = pd.DataFrame(columns=['X', 'Y', 'Z','Vx','Vy','Vz'])
-
-for i in range(len(b_unique)):
-    s = b_unique[i].find_all("UTC")[0].contents[0]
-    x = b_unique[i].find_all("X")[0].contents[0]
-    y = b_unique[i].find_all("Y")[0].contents[0]
-    z = b_unique[i].find_all("Z")[0].contents[0]
-    vx = b_unique[i].find_all("VX")[0].contents[0]
-    vy = b_unique[i].find_all("VY")[0].contents[0]
-    vz = b_unique[i].find_all("VZ")[0].contents[0]
-    a = datetime.strptime(s, "UTC=%Y-%m-%dT%H:%M:%S.%f")
-    position.loc[a] = [float(x), float(y), float(z), float(vx), float(vy), float(vz)]
-
-d = position.iloc[0].name
-
-
-
-thisPV = PVCoordinates(Vector3D(5665849.027545, -4240370.657895,-40753.628053),
-                                   Vector3D(-921.855016,-1288.326693,7430.094083))
-thisPVT = TimeStampedPVCoordinates(AbsoluteDate(2022, 1, 2, 20, 28, 42.382456, utc),
-                                   Vector3D(5665849.027545, -4240370.657895,-40753.628053),
-                                   Vector3D(-921.855016,-1288.326693,7430.094083))
-ecef2eci = ecefFrame.getTransformTo(eciFrame,AbsoluteDate(2022, 1, 2, 20, 28, 42.382456, utc))
-inertialPV = ecef2eci.transformPVCoordinates(thisPV)
-inertialPVT = TimeStampedPVCoordinates(AbsoluteDate(2022, 1, 2, 20, 28, 42.382456, utc),
-                                        inertialPV.getPosition(),
-                                        inertialPV.getVelocity())
-
-thisOrbit = CartesianOrbit(inertialPV, eciFrame,
-                            AbsoluteDate(2022, 1, 2, 20, 28, 42.382456, utc),
-                           Constants.WGS84_EARTH_MU )
-sc = SpacecraftState(thisOrbit)
-
-prop = COD_().ExGetPropagator(sc, "H", 0.1,1.0,0.01,0.01)
-
-secpv = prop.propagate(AbsoluteDate(2022, 1, 2, 23, 46, 12.382456, utc)).getPVCoordinates()
-
-eci2ecef = eciFrame.getTransformTo(ecefFrame,AbsoluteDate(2022, 1, 2, 23, 46, 12.382456, utc))
-resu = eci2ecef.transformPVCoordinates(secpv)
-print(resu.getPosition())
-print(resu.getVelocity())
-a =0
-
-#print(cons[1].getRightAscensionOfAscendingNode())
-
-
-
-###########################################################################
-############################################################################
-############################################################################
-"""
-
-# initial figure configuration
-earthMapColorScale =[[0.0, 'rgb(30, 59, 117)'],
-                 [0.1, 'rgb(46, 68, 21)'],
-                 [0.2, 'rgb(74, 96, 28)'],
-                 [0.3, 'rgb(115,141,90)'],
-                 [0.4, 'rgb(122, 126, 75)'],
-                 [0.6, 'rgb(122, 126, 75)'],
-                 [0.7, 'rgb(141,115,96)'],
-                 [0.8, 'rgb(223, 197, 170)'],
-                 [0.9, 'rgb(237,214,183)'],
-                 [1.0, 'rgb(255, 255, 255)']]
-
-def sphereGenerator(size, texture): 
-    N_lat = int(texture.shape[0])
-    N_lon = int(texture.shape[1])
-    theta = np.linspace(0,2*np.pi,N_lat)
-    phi = np.linspace(0,np.pi,N_lon)
-    
-    # Set up coordinates for points on the sphere
-    x0 = size * np.outer(np.cos(theta),np.sin(phi))
-    y0 = size * np.outer(np.sin(theta),np.sin(phi))
-    z0 = size * np.outer(np.ones(N_lat),np.cos(phi))
-    
-    # Set up trace
-    return x0,y0,z0
-
-def rearangeTexture(texture):
-    N_lat = int(texture.shape[0])
-    N_lon = int(texture.shape[1])
-    newTexture = np.zeros([N_lat, N_lon], dtype=np.uint8)
-    newTexture[:1024] = texture[1024:]
-    newTexture[1024:] = texture[:1024]
-    return newTexture
-    
-
-
-earthMapTextureT = np.asarray(Image.open('earth.jpeg'.format('earth'))).T
-earthMapTexture = rearangeTexture(earthMapTextureT)
-
-
-earthSphereX,earthSphereY,earthSphereZ = sphereGenerator(Constants.WGS84_EARTH_EQUATORIAL_RADIUS,earthMapTexture)
-earhtMarbleSurf = go.Surface(x=earthSphereX, y=earthSphereY, z=earthSphereZ,
-                  surfacecolor=earthMapTexture,
-                  colorscale=earthMapColorScale) 
-
-earhtMarbleFigure = go.Figure(data=[earhtMarbleSurf])
-
-
-
-
-
-
-
-elevationMask = 10.0  # in degrees
-
-# Scenario Start Time
-utc = TimeScalesFactory.getUTC()
-startTime = AbsoluteDate(2022, 10, 3, 8, 30, 0.0, utc)
-endTime = AbsoluteDate(2022, 10, 3, 8, 50, 0.0, utc)
-# referenceDate = AbsoluteDate.J2000_EPOCH  # reference date
-# mjdUtcEpoch = AbsoluteDate(1858, 11, 17, 0, 0, 0.0, utc)
-
-
-ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, IERSConventions.IERS_2010, True)
-eciFrame = FramesFactory.getGCRF()
-moon = CelestialBodyFactory.getMoon()
-sun = CelestialBodyFactory.getSun()
-wgs84Ellipsoid = ReferenceEllipsoid.getWgs84(ecefFrame)
-
-
-
-#stationPoint = GeodeticPoint(35.0 * np.pi / 180.0, 51.0 * np.pi / 180.0, 100.0)
-#ecefpos = TopocentricFrame(wgs84Ellipsoid, stationPoint, 'name').getPVCoordinates(startTime, ecefFrame).getPosition()
-#earhtMarbleFigure.add_trace(go.Scatter3d(x = [ecefpos.getX()], 
-#                                         y = [ecefpos.getY()], 
-#                                         z = [ecefpos.getZ()]))
-#pio.show(earhtMarbleFigure)
-
-initialRealOrbitSat1 = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + 700000.0,  # Semimajor Axis (m)
-                                      0.0,  # Eccentricity
-                                      89.0 * np.pi / 180,  # Inclination (radians)
-                                      0.0 * np.pi / 180,  # Perigee argument (radians)
-                                      0.0 * np.pi / 180,  # Right ascension of ascending node (radians)
-                                      0.0 * np.pi / 180,  # Anomaly (rad/s)
-                                      PositionAngle.TRUE,  # Sets which type of anomaly we use
-                                      eciFrame,
-                                      # The frame in which the parameters are defined (must be a pseudo-inertial frame)
-                                      startTime,  # Sets the date of the orbital parameters
-                                      Constants.WGS84_EARTH_MU)  # Sets the central attraction coefficient (m³/s²)
-initialRealOrbitSat2 = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + 700000.0,  # Semimajor Axis (m)
-                                      0.0,  # Eccentricity
-                                      78.0 * np.pi / 180,  # Inclination (radians)
-                                      0.0 * np.pi / 180,  # Perigee argument (radians)
-                                      207.0 * np.pi / 180,  # Right ascension of ascending node (radians)
-                                      25.0 * np.pi / 180,  # Anomaly (rad/s)
-                                      PositionAngle.TRUE,  # Sets which type of anomaly we use
-                                      eciFrame,
-                                      # The frame in which the parameters are defined (must be a pseudo-inertial frame)
-                                      startTime,  # Sets the date of the orbital parameters
-                                      Constants.WGS84_EARTH_MU)  # Sets the central attraction coefficient (m³/s²)
-initialEstimatedOrbitSat1 = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + 501234.0,
-                                           0.0, 78.1 * np.pi / 180, 0.0 * np.pi / 180, 179.5 * np.pi / 180,
-                                           26.00 * np.pi / 180,
-                                           PositionAngle.TRUE, eciFrame, startTime, Constants.WGS84_EARTH_MU)
-initialEstimatedOrbitSat2 = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + 500221.0,
-                                           0.0, 78.0 * np.pi / 180, 0.0 * np.pi / 180, 207.0 * np.pi / 180,
-                                           25.0 * np.pi / 180,
-                                           PositionAngle.TRUE, eciFrame, startTime, Constants.WGS84_EARTH_MU)
-
-
-starConstellation, activeSatellites, selectedOrbitsIndexes, linkList = COD_.ExBuildWalker( 15, 28, 1, initialRealOrbitSat1, [30])
-epochECI2ECEF = eciFrame.getTransformTo(ecefFrame, startTime)
-initialConfig = []
+'''
+earhtMarbleFigure = mainScenario.getBlueMarbleFigure('earth.jpeg')
+epochECI2ECEF = mainScenario.eciFrame.getTransformTo(mainScenario.ecefFrame, mainScenario.startTime)
+constellationX = []
+constellationY = []
+constellationZ = []
 for j in range(len(activeSatellites)):
     eciPos = activeSatellites[j].getPVCoordinates().getPosition()
     truePositionECEF = epochECI2ECEF.getRotation().applyTo(eciPos)
-    earhtMarbleFigure.add_trace(go.Scatter3d(x = [truePositionECEF.getX()], 
-                                         y = [truePositionECEF.getY()], 
-                                         z = [truePositionECEF.getZ()]))
-    initialConfig.append(truePositionECEF)
-
+    constellationX.append(truePositionECEF.getX())
+    constellationY.append(truePositionECEF.getY())
+    constellationZ.append(truePositionECEF.getZ())
+earhtMarbleFigure.add_trace(go.Scatter3d(x = constellationX, 
+                                    y = constellationY, 
+                                     z = constellationZ,  mode='markers'))
 earhtMarbleFigure.update_coloraxes(showscale=False)
 earhtMarbleFigure.update_layout(showlegend=False)
 pio.show(earhtMarbleFigure)
-
-# Orbit propagator parameters
-prop_min_step = 0.01  # s
-prop_max_step = 2.0  # s
-prop_position_error = 3.0  # m
-
-sat1RealPropagator = COD_.ExGetPropagator("Get", initialRealOrbitSat1, 100.0,
-                                          eciFrame, ecefFrame, "H", prop_min_step, prop_max_step,
-                                          prop_position_error, prop_position_error)
-sat2RealPropagator = COD_.ExGetPropagator("Get", initialRealOrbitSat2, 100.0,
-                                          eciFrame, ecefFrame, "H", prop_min_step, prop_max_step,
-                                          prop_position_error, prop_position_error)
+'''
 
 
 
+propagatorsList = []
 
-sat1EstimatedPropagatorBuilder = COD_.ExGetPropagator("Builder", initialEstimatedOrbitSat1, 100.0,
+for i in range(len(activeSatellites)):
+    propagatorsList.append(mainScenario.getPropagator("Get", activeSatellites[i], 100.0, "H"))
+
+
+for i in range(mainScenario.numberOfGroundStation):
+    meas = ssEnvironmentBuilder.generate_measurements(sat1RealPropagator, this_cons.groundStationsList[i], str(i), 0.0,
+                                      5.0 * np.pi / 180.0, "RANGERATE",
+                                      currentDateTime, 1.0)
+
+
+
+
+
+
+
+
+
+sat1EstimatedPropagatorBuilder = ssEnvironmentBuilder.ExGetPropagator("Builder", initialEstimatedOrbitSat1, 100.0,
                                                       eciFrame, ecefFrame, "H", prop_min_step, prop_max_step,
                                                       prop_position_error, prop_position_error)
 
 # aa = FiniteDifferencePropagatorConverter(sat1EstimatedPropagatorBuilder, 1e-3, 1000)
 # aa.convert()
 
-sat2EstimatedPropagatorBuilder = COD_.ExGetPropagator("Builder", initialEstimatedOrbitSat2, 100.0,
+sat2EstimatedPropagatorBuilder = ssEnvironmentBuilder.ExGetPropagator("Builder", initialEstimatedOrbitSat2, 100.0,
                                                       eciFrame, ecefFrame, "H", prop_min_step, prop_max_step,
                                                       prop_position_error, prop_position_error)
 
@@ -670,19 +625,11 @@ range_sigma = 0.01  # Estimated covariance of the range measurements, in meters
 isTwoWay = True
 currentDateTime = startTime
 
-this_cons = COD_()
-this_cons.addGroundStation(30.0, 48.5, 0.0, "Boushehr")
-this_cons.addGroundStation(35.0, 51.0, 0.0, "Tehran")
-#### this_cons.addGroundStation(30.0, 50.0, 0.0, "Boushehr")
-#### this_cons.addGroundStation(33.0, 48.0, 1500.0, "Aleshtar")
-#this_cons.addGroundStation(25.0, 59.0, 0.0, "Bandar Abbas")
-#this_cons.addGroundStation(35.0, 58.0, 0.0, "Mashhad")
-#this_cons.addGroundStation(38.0, 46.0, 0.0, "Tabriz")
-#this_cons.addGroundStation(27.0, 63.0, 0.0, "Sistan")
+
 
 
 for i in range(this_cons.numberOfGroundStation):
-    meas = COD_.generate_measurements(sat1RealPropagator, this_cons.groundStationsList[i], str(i), 0.0,
+    meas = ssEnvironmentBuilder.generate_measurements(sat1RealPropagator, this_cons.groundStationsList[i], str(i), 0.0,
                                       5.0 * np.pi / 180.0, "RANGERATE",
                                       currentDateTime, 1.0)
     for m in meas:
