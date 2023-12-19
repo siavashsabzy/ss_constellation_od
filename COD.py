@@ -4,12 +4,12 @@ orekit.initVM()
 from orekit import JArray, JArray_double
 from org.orekit.models.earth import ReferenceEllipsoid
 from org.orekit.attitudes import NadirPointing
-from org.orekit.propagation.events import ElevationDetector
+from org.orekit.propagation.events import ElevationDetector, InterSatDirectViewDetector
 from org.orekit.propagation.events.handlers import ContinueOnEvent
 from org.orekit.forces.gravity.potential import GravityFieldFactory
 from org.orekit.forces.gravity import HolmesFeatherstoneAttractionModel
 from org.orekit.forces.gravity import ThirdBodyAttraction
-from org.orekit.forces.radiation import IsotropicRadiationSingleCoefficient
+from org.orekit.forces.radiation import IsotropicRadiationSingleCoefficient, IsotropicRadiationCNES95Convention
 from org.orekit.forces.radiation import SolarRadiationPressure
 from org.orekit.forces.gravity import Relativity, OceanTides, SolidTides
 from org.orekit.models.earth.atmosphere.data import MarshallSolarActivityFutureEstimation
@@ -20,17 +20,21 @@ from org.orekit.estimation.leastsquares import BatchLSEstimator, PythonBatchLSOb
 from org.hipparchus.optim.nonlinear.vector.leastsquares import GaussNewtonOptimizer
 from org.hipparchus.linear import QRDecomposer
 from org.orekit.propagation.conversion import NumericalPropagatorBuilder
-from org.orekit.estimation.measurements import GroundStation, Range, RangeRate, ObservableSatellite, AngularAzEl, \
-    Position
-from org.orekit.estimation.measurements.gnss import OneWayGNSSRange
+from org.orekit.estimation.measurements import GroundStation, Range, RangeRate, ObservableSatellite, AngularAzEl, AngularRaDec, \
+    Position, PV, InterSatellitesRange
+from org.orekit.estimation.measurements.gnss import OneWayGNSSRange, InterSatellitesPhase
 from org.orekit.estimation.measurements.generation import Generator, RangeBuilder, RangeRateBuilder, AngularAzElBuilder, \
-    EventBasedScheduler, SignSemantic
+    EventBasedScheduler, SignSemantic, AngularRaDecBuilder, InterSatellitesRangeBuilder, InterSatellitesPhaseBuilder, \
+    ContinuousScheduler, OneWayGNSSRangeBuilder, GatheringSubscriber, PVBuilder
+       
+
+from org.orekit.gnss import  Frequency
 # from org.orekit.estimation.measurements.generation import RangeBuilder, RangeRateBuilder
 from org.orekit.frames import FramesFactory, TopocentricFrame, ITRFVersion, LOFType
-from org.orekit.time import AbsoluteDate, TimeScalesFactory, FixedStepSelector
+from org.orekit.time import AbsoluteDate, TimeScalesFactory, FixedStepSelector, BurstSelector
 from org.orekit.utils import Constants, IERSConventions, PVCoordinates, TimeStampedPVCoordinates
 from org.orekit.bodies import GeodeticPoint, CelestialBodyFactory
-from org.orekit.orbits import KeplerianOrbit, PositionAngle, CartesianOrbit
+from org.orekit.orbits import KeplerianOrbit, CartesianOrbit, PositionAngleType
 from org.orekit.propagation import SpacecraftState
 # from org.orekit.propagation.analytical import KeplerianPropagator
 # from org.orekit.propagation.sampling import OrekitFixedStepHandler
@@ -41,7 +45,7 @@ from org.orekit.propagation.numerical import NumericalPropagator
 # from org.hipparchus.linear import RealMatrix
 from org.hipparchus.geometry.euclidean.threed import Vector3D, SphericalCoordinates
 from org.hipparchus.random import Well19937a, GaussianRandomGenerator, CorrelatedRandomVectorGenerator
-from org.hipparchus.linear import MatrixUtils
+from org.hipparchus.linear import MatrixUtils, Array2DRowRealMatrix
 
 # Atmospheric Models
 from org.orekit.models.earth import EarthITU453AtmosphereRefraction
@@ -50,8 +54,10 @@ from org.orekit.models.earth.troposphere import SaastamoinenModel
 
 from orekit.pyhelpers import setup_orekit_curdir, absolutedate_to_datetime
 from org.orekit.propagation.analytical.gnss import GNSSPropagator, GNSSPropagatorBuilder
-from org.orekit.propagation.analytical.gnss.data import CommonGnssData, GNSSOrbitalElements, AbstractNavigationMessage, GPSNavigationMessage
+from org.orekit.propagation.analytical.gnss.data import CommonGnssData, GNSSOrbitalElements, AbstractNavigationMessage
 from org.orekit.propagation.conversion import PropagatorConverter, FiniteDifferencePropagatorConverter, AbstractPropagatorConverter
+from org.orekit.estimation.iod import IodGooding
+
 
 
 setup_orekit_curdir()
@@ -70,66 +76,83 @@ import webbrowser
 webbrowser.register('firefox', None, webbrowser.BackgroundBrowser("C:\\Program Files\\Mozilla Firefox\\firefox.exe"))
 pio.renderers.default = "firefox"
 
-
-class GroundStation_:
-    def __init__(self, name, latitude, longitude, altitude, elevationAngle, temperature, humidity, pressure,
-                 identification):
-        self.name = name
-        self.latitude = latitude
-        self.longitude = longitude
-        self.altitude = altitude
-        self.elevationAngle = (elevationAngle) * (np.pi / 180.0)
-        self.temperature = temperature
-        self.humidity = humidity
-        self.pressure = pressure
-        self.identification = identification
-
-    def groundStation(self, ellipsoid):
-        geodeticPoint = GeodeticPoint(self.latitude, self.longitude, self.altitude)
-        topocentricFrame = TopocentricFrame(ellipsoid, geodeticPoint, self.name)
-        return GroundStation(topocentricFrame)
-
-    def atmosphericRefraction(self):
-        return EarthITU453AtmosphereRefraction(self.altitude)
-
-    def troposphericModel(self):
-        return SaastamoinenModel(self.temperature, self.pressure, self.humidity)
-
-# def ionosphericModel(self):
-
-
 class ssEnvironmentBuilder():
 
     def __init__(self):
-        super().__init__()
-
+        super().__init__()       
         self.utc = TimeScalesFactory.getUTC()
-        self.startTime = AbsoluteDate(2022, 10, 3, 8, 30, 0.0, self.utc)
-        self.endTime = AbsoluteDate(2022, 10, 3, 8, 50, 0.0, self.utc)
+        self.startTime = AbsoluteDate(2020, 8, 13, 19, 0, 0.0, self.utc)
+        self.duration = 20 / 60
+        self.durationAfterEstimation = 90.0 / 60.0 
+        self.endEstimation = self.startTime.shiftedBy(self.duration * 3600.0)
+        self.endTime = self.endEstimation.shiftedBy(self.durationAfterEstimation * 3600.0)
+        self.plotStepTime = 1.0
+        #self.endTime = AbsoluteDate(2020, 8, 14, 19, 0, 0.0, self.utc)
         self.RAD2DEG = (180 / np.pi)
         self.DEG2RAD = (np.pi / 180)
+        self.nominalAltitudes = [600, 800] # range
+
+        self.showActiveSatellites = True
+
+
         self.rangeMaxError = 0.001
+
         self.rangeSigma = 0.01
-        self.rangeWeight = 0.01
+        self.rangeWeight = 0.1
+        self.stationSigma=0.00400 # RangeRate sigma
+        self.stationBaseWeight=1.0
+        self.stationisTwoWay = True
+        self.stationRefractio = True
+        self.stationSampleTime = 1.0
+        self.stationStd = 0.001
+
+        self.noiseSeed = 1
+
+
+        self.isISL = False
+        self.islSigma = 0.005       # filter parameter
+        self.islBaseWeight = 4.0    # filter parameter
+        self.isTwoWay = True        # Observation parameter
+        self.islSampleTime = 0.10   # Observation parameter
+        self.islScheduler = 'Continuous' # alternative 'InView'
+        self.islStd = 0.0001        # Environment parameter
+
+        self.gpsSampleTime = 1.0    # Observation parameter
+        self.gpsSigma = 1.8         # filter parameter
+        self.gpsBaseWeight = 1.0    # filter parameter
+        self.gpsPositionStd = float(100) # GPS Position Error ~ 3-sigma: 100 [m]
+        self.gpsVelocitystd = self.gpsPositionStd / 20 # GPS Velocity Error
+        self.GPSMaxBurstSize = 1    # maximum number of selected dates in a burst
+        self.GPSHighRateStep = 1.0 * self.gpsSampleTime # step between two consecutive dates within a burst (s)
+        self.GPSBurstPeriod  = 1.0 * self.gpsSampleTime # period between the start of each burst (s)
+
+
+
+
         self.groundStationsList = []
         self.numberOfGroundStation = 0
         self.spacecraftsList = []
         self.propagatorsList = []
         self.referenceOrbit = []
-        self.isTwoWay = True
-        self.ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, IERSConventions.IERS_2010, True)
+        
         self.eciFrame = FramesFactory.getGCRF()
+        self.ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, IERSConventions.IERS_2010, True)
         self.wgs84Ellipsoid = ReferenceEllipsoid.getWgs84(self.ecefFrame)
         self.moon = CelestialBodyFactory.getMoon()
         self.sun = CelestialBodyFactory.getSun()  
         # Orbit propagator parameters
-        self.propagationMinTimeStep = 0.01  # s
+        self.propagationMinTimeStep = 0.5  # s
         self.propagationMaxTimeStep = 2.0  # stimestep
         self.vectorAbsoluteTolerance = 3.0  # m
         self.vectorRelativeTolerance = 3.0 # m
+        # other filter parameters
+        self.BLSestimatorConvergenceThreshold = 1e-5
+        self.BLSestimatorMaxIterations = 25
+        self.BLSestimatorMaxEvaluations = 35
 
 
-        self.elevationMask = 10.0  # in degrees
+
+        self.elevationMask = 10.0 * np.pi / 180.0 # radian(s)
 
         self.earthMapColorScale =[[0.0, 'rgb(30, 59, 117)'],
                  [0.1, 'rgb(46, 68, 21)'],
@@ -146,7 +169,56 @@ class ssEnvironmentBuilder():
         # referenceDate = AbsoluteDate.J2000_EPOCH  # reference date
         # mjdUtcEpoch = AbsoluteDate(1858, 11, 17, 0, 0, 0.0, utc)
 
-    def addReferenceOrbit(self, altitude, eccentricity, inclination, raan, aop, trueAnomaly):
+    def feedGroundStations(self, names):
+        '''
+        this method is designed to define a collection of ground stations to the 
+        environment model. The method only take one or a list of following stations:
+        Boushehr, Tehran, Aleshtar, Bandar Abbas, Mashhad, Tabriz, Sistan
+        
+        Each time you run the method, the collection will be intialized.
+        '''
+
+        addedGroundStations = []
+        for i in range(len(names)):
+            if names[i] == "Boushehr":
+                self.addGroundStation(30.0, 48.5, 0.0, "Boushehr")
+                addedGroundStations.append(names[i])
+            elif names[i] == "Tehran":
+                self.addGroundStation(35.0, 51.0, 0.0, "Tehran")
+                addedGroundStations.append(names[i])
+            elif names[i] == "Aleshtar":
+                self.addGroundStation(33.0, 48.0, 1500.0, "Aleshtar")
+                addedGroundStations.append(names[i])
+            elif names[i] == "Bandar Abbas":
+                self.addGroundStation(25.0, 59.0, 0.0, "Bandar Abbas")
+                addedGroundStations.append(names[i])
+            elif names[i] == "Mashhad":
+                self.addGroundStation(35.0, 58.0, 0.0, "Mashhad")
+                addedGroundStations.append(names[i])
+            elif names[i] == "Tabriz":
+                self.addGroundStation(38.0, 46.0, 0.0, "Tabriz")
+                addedGroundStations.append(names[i])
+            elif names[i] == "Sistan":
+                self.addGroundStation(27.0, 63.0, 0.0, "Sistan")
+                addedGroundStations.append(names[i])
+            else:
+                pass
+        print(" ")
+        print("added Ground Stations ({}): {}".format(len(addedGroundStations), addedGroundStations))
+            
+            
+            
+            
+
+    def addReferenceOrbit(self, altitude, eccentricity, inclination, raan, aop, trueAnomaly,
+                           anomalyType=PositionAngleType.TRUE):
+        '''
+        this method is designed to define a reference orbit to the environment, Based on this orbit the 
+        following constellation will be built.
+        
+        Each time you run the method, the orbit will be intialized.
+        '''
+
         self.referenceOrbit = []
         self.referenceOrbit = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + altitude,  # Semimajor Axis (m)
                                       eccentricity,  # Eccentricity
@@ -154,12 +226,162 @@ class ssEnvironmentBuilder():
                                       aop * np.pi / 180,  # Perigee argument (radians)
                                       raan * np.pi / 180,  # Right ascension of ascending node (radians)
                                       trueAnomaly * np.pi / 180,  # Anomaly (rad/s)
-                                      PositionAngle.TRUE,  # Sets which type of anomaly we use
-                                      self.eciFrame,
-                                      # The frame in which the parameters are defined (must be a pseudo-inertial frame)
+                                      anomalyType,  # Sets which type of anomaly we use
+                                      self.eciFrame, # The frame in which the parameters are defined (must be a pseudo-inertial frame)
                                       self.startTime,  # Sets the date of the orbital parameters
                                       Constants.WGS84_EARTH_MU)  # Sets the central attraction coefficient (m³/s²)
+        
+    
+    def performGooding(self, radecs, ranges):
+        '''
+        this method is designed to select proper measurements and perform an iod as initial guesses for pod
+            as inputs this function takes lists of rightAscentions-declination, ranges and validated altitude range
+        if successful this method gives a keplerian orbit
+        '''
+        # select measurements
+        IodFunction = IodGooding(Constants.WGS84_EARTH_MU)
+        orbit = []
+        lowerBand = self.nominalAltitudes[0] * 1000.0 + Constants.WGS84_EARTH_EQUATORIAL_RADIUS
+        upperBand = self.nominalAltitudes[1] * 1000.0 + Constants.WGS84_EARTH_EQUATORIAL_RADIUS
+        try:
+            initialRADEC = radecs[0]
+            initialRange = ranges[0]
+            lastRADEC = radecs[-1]
+            lastRange = ranges[-1]
+            middleRADEC = radecs[int(len(radecs)/2)]
 
+            if (  (initialRADEC.getDate().compareTo(initialRange.getDate()) > 0.01)    or 
+                    (lastRADEC.getDate().compareTo(lastRange.getDate()) > 0.01)     ):
+                pass
+            else:
+                orbitGuess = IodFunction.estimate(self.eciFrame, initialRADEC, middleRADEC, lastRADEC,
+                                    initialRange.getObservedValue()[0], lastRange.getObservedValue()[0], 0, True)
+                if (orbitGuess.getA() < lowerBand) or (orbitGuess.getA() > upperBand):
+                    pass
+                else:
+                    orbit = orbitGuess
+        except:
+            pass    
+        return orbit
+    
+    def performIod(self, propagator, groundStationsList, startTime , duration=1.5):
+        orbit = []
+        while orbit == []:
+            for i in range(len(groundStationsList)):
+                radecs = []
+                ranges = []
+                station = groundStationsList[i]
+                stationName = groundStationsList[i].getBaseFrame().getName()   
+                altitude = groundStationsList[i].getBaseFrame().getPoint().getAltitude()
+                radecs = self.generateMeasurements(propagator, station, stationName, altitude,
+                                        self.elevationMask, "RADEC",
+                                        startTime, duration, self.eciFrame)
+                ranges = self.generateMeasurements(propagator, station, stationName , altitude,
+                                        self.elevationMask, "RANGE",
+                                        startTime, duration, self.eciFrame)
+                
+                orbit = self.performGooding(radecs, ranges)
+
+                if orbit != []:
+                    break
+                else:
+                    orbit = []
+            startTime = startTime.shiftedBy(duration*3600.0)
+
+        return orbit
+
+
+    def getPodEstimator(self, propagatorBuilder):
+        matrixDecomposer = QRDecomposer(1e-11)
+        optimizer = GaussNewtonOptimizer(matrixDecomposer, False)
+        satEstimator = BatchLSEstimator(optimizer, propagatorBuilder)
+        satEstimator.setParametersConvergenceThreshold(self.BLSestimatorConvergenceThreshold)
+        satEstimator.setMaxIterations(self.BLSestimatorMaxIterations)
+        satEstimator.setMaxEvaluations(self.BLSestimatorMaxEvaluations)
+        satEstimator.setObserver(MyObserver())
+        return satEstimator
+    
+    def feedPodMeasurements(self, estimator, allOrbits, startTime, duration, measurementsType, linkList):
+        
+        if measurementsType == "GPS":
+            meas = self.generateMeasurements(allOrbits, [], [], 0.0,
+                                        self.elevationMask, "GPS",
+                                            startTime, duration, self.eciFrame, linkList)
+            i = 0
+            for m in meas:
+                estimator.addMeasurement(m)
+                i += 1
+            print("{} measurements added to estimator".format(i))
+        else:
+            for i in range(self.numberOfGroundStation):
+                station = self.groundStationsList[i]
+                stationName = self.groundStationsList[i].getBaseFrame().getName()   
+                altitude = self.groundStationsList[i].getBaseFrame().getPoint().getAltitude()
+                meas = self.generateMeasurements(allOrbits, station, stationName, altitude,
+                                            self.elevationMask, "RANGERATE",
+                                                startTime, duration, self.eciFrame, linkList)
+                i = 0
+                for m in meas:
+                    estimator.addMeasurement(m)
+                    i += 1
+                print("{} measurements added to estimator, for {} station".format(i, stationName))
+
+
+    def feedIslMeasurements(self, estimator, underODPropagator, linkedpropagators, startTime, duration, islType, linkList):
+        initIslTime = startTime
+        finalIslTime = initIslTime.shiftedBy(duration * 3600.0)
+        mn = 0
+        fixed_step_selector = FixedStepSelector(self.islSampleTime , self.utc)
+        small = 1e-10
+        seed = self.noiseSeed
+        random_generator = Well19937a(int(seed))
+        gaussian_generator = GaussianRandomGenerator(random_generator)
+        covariance = MatrixUtils.createRealDiagonalMatrix([self.islStd**2, self.islStd**2])
+        noise_source = CorrelatedRandomVectorGenerator(covariance, float(small), gaussian_generator)
+        gatherer = GatheringSubscriber()
+        generator = Generator()
+        generator.addSubscriber(gatherer)
+        local = underODPropagator
+        localEphemerisGenerator = local.getEphemerisGenerator()
+        local.propagate(initIslTime , finalIslTime)
+        localBoundedPropagator = localEphemerisGenerator.getGeneratedEphemeris()
+        satellite = generator.addPropagator(localBoundedPropagator)
+        Rsatellites = []
+        for i in range(len(linkedpropagators)):
+            remote = linkedpropagators[i]
+            remoteEphemerisGenerator = remote.getEphemerisGenerator()
+            remote.propagate(initIslTime , finalIslTime)
+            remoteBoundedPropagator = remoteEphemerisGenerator.getGeneratedEphemeris()
+            Rsatellites.append(generator.addPropagator(remoteBoundedPropagator))
+        for j in range(len(Rsatellites)):
+            if islType == 'Range':
+                Builder = InterSatellitesRangeBuilder(noise_source, satellite, 
+                                                                    Rsatellites[j], self.isTwoWay, 
+                                                                    self.islSigma, self.islBaseWeight)
+            else:
+                Builder = InterSatellitesPhaseBuilder(noise_source, satellite, 
+                                                                Rsatellites[j], Frequency.G01.getWavelength(), 
+                                                                self.islSigma, self.islBaseWeight)
+            if self.islScheduler == 'InView':
+                interDetector = InterSatDirectViewDetector( self.wgs84Ellipsoid , remoteBoundedPropagator)
+                scheduler = EventBasedScheduler(Builder, fixed_step_selector, underODPropagator,
+                                             interDetector,
+                                            SignSemantic.FEASIBLE_MEASUREMENT_WHEN_POSITIVE)
+                generator.addScheduler(scheduler)
+            else:
+                generator.addScheduler(ContinuousScheduler(Builder, fixed_step_selector))
+            generator.generate(initIslTime, finalIslTime)
+            measurements = gatherer.getGeneratedMeasurements()
+            for measObject in measurements:
+                mn += 1
+                if islType == 'Range':
+                    meas = InterSatellitesRange.cast_(measObject)
+                else:
+                    meas = InterSatellitesPhase.cast_(measObject)
+                estimator.addMeasurement(meas)
+            print("{} measurements feeded to satellite #{} estimator from ISL {} observations of satellite #{}".format(mn,
+                   linkList[0], islType, linkList[j+1]))
+         
     def addGroundStation(self, latitude, longitude, altitude, name):
         stationPoint = GeodeticPoint(latitude * self.DEG2RAD, longitude * self.DEG2RAD, altitude)
         stationFrame = TopocentricFrame(self.wgs84Ellipsoid, stationPoint, name)
@@ -170,63 +392,167 @@ class ssEnvironmentBuilder():
     def addSpacecraft(self, spacecraft):
         self.spacecraftsList.append(spacecraft)
 
-    def generate_measurements(propagator, station, station_name, altitude, elevAngle, meas_type, t0, duration,
-                              sigma=0.00400,  # RangeRate sigma
-                              base_weight=1.0,
-                              two_way=True,
-                              withRefraction=True,
-                              step=1.0,
-                              seed=0.0):
+    def displayActiveSatellitesConfiguration(self, activeSatellites, selectedOrbitsIndexes, linkList):
+        earhtMarbleFigure = self.getBlueMarbleFigure('earth.jpeg')
+        epochECI2ECEF = self.eciFrame.getTransformTo(self.ecefFrame, self.startTime)
+        for i in range(len(selectedOrbitsIndexes)):
+            if selectedOrbitsIndexes[i] == linkList[0, 0]:
+                mainSat = i
+        mainSatEci = activeSatellites[mainSat].getPVCoordinates().getPosition()
+        mainSatECEF = epochECI2ECEF.getRotation().applyTo(mainSatEci)
 
-        measurementslist = []
+        constellationX = []
+        constellationY = []
+        constellationZ = []
+        for j in range(len(activeSatellites)):
+            if j == mainSat:
+                pass
+            else:
+                eciPos = activeSatellites[j].getPVCoordinates().getPosition()
+                truePositionECEF = epochECI2ECEF.getRotation().applyTo(eciPos)
+                constellationX.append(truePositionECEF.getX())
+                constellationY.append(truePositionECEF.getY())
+                constellationZ.append(truePositionECEF.getZ())
+        earhtMarbleFigure.add_trace(go.Scatter3d(x = constellationX, 
+                                            y = constellationY, 
+                                            z = constellationZ,  mode='markers'))
+        earhtMarbleFigure.add_trace(go.Scatter3d(x = [mainSatECEF.getX()], 
+                                            y = [mainSatECEF.getY()], 
+                                            z = [mainSatECEF.getZ()],  mode='markers'))
+        earhtMarbleFigure.update_coloraxes(showscale=False)
+        earhtMarbleFigure.update_layout(showlegend=False)
+        pio.show(earhtMarbleFigure)
+
+    def getInertialPositionDifference(self, prop1, prop2, currentDateTime, endTime, step):
+        positionResidual = pd.DataFrame(columns=['X', 'Y', 'Z','Norm'])
+        while currentDateTime.compareTo(endTime) <= 0:
+            truePosition = prop1.propagate(currentDateTime).getPVCoordinates().getPosition()
+            estimatedPosition = prop2.propagate(currentDateTime).getPVCoordinates().getPosition()
+            positionDifference = truePosition.subtract(estimatedPosition)
+            positionResidual.loc[absolutedate_to_datetime(currentDateTime)] = \
+                [positionDifference.getX(), positionDifference.getY(), positionDifference.getZ(), positionDifference.getNorm()]
+            currentDateTime = currentDateTime.shiftedBy(step)
+        return positionResidual
+
+    def getRICPositionDifference(self, prop1, prop2, currentDateTime, endTime, step):
+        positionResidual = pd.DataFrame(columns=['X', 'Y', 'Z','Norm'])
+        while currentDateTime.compareTo(endTime) <= 0:
+            truePosition = prop1.propagate(currentDateTime).getPVCoordinates().getPosition()
+            estimatedPosition = prop2.propagate(currentDateTime).getPVCoordinates().getPosition()
+            positionDifference = truePosition.subtract(estimatedPosition)
+            errorInLVLH = LOFType.LVLH.rotationFromInertial(prop1.propagate(currentDateTime).getPVCoordinates()).applyTo(positionDifference)
+            positionResidual.loc[absolutedate_to_datetime(currentDateTime)] = \
+                [errorInLVLH.getX(), errorInLVLH.getY(), errorInLVLH.getZ(), errorInLVLH.getNorm()]
+            currentDateTime = currentDateTime.shiftedBy(step)
+        return positionResidual
+    
+    def getResidualFigure(self, dataFrame, additionalInfoStrings):
+        trace = go.Scattergl(
+                    x=dataFrame.index, y=dataFrame['Norm'],
+                    mode='markers',
+                    name='PositionNormError'
+                )
+        layout = go.Layout(title='Position residuals: ' + additionalInfoStrings, 
+                   xaxis=dict(title='Datetime UTC'), 
+                   yaxis=dict(title='Position residual (m)') )
+
+        fig = dict(data=trace, layout=layout)
+        return fig
+
+    def generateMeasurements(self, allOrbits, station, station_name, altitude, elevAngle, meas_type, t0, duration, eciFrame, linkList, mass = 100.0):
+        two_way = self.stationisTwoWay
+        withRefraction= self.stationRefractio
+        step = self.stationSampleTime
+        seed = self.noiseSeed
         tf = t0.shiftedBy(3600.0 * duration)
-
-        small = 1e-10
-        random_generator = Well19937a(int(seed))
-        gaussian_generator = GaussianRandomGenerator(random_generator)
-        covariance = MatrixUtils.createRealDiagonalMatrix([float(sigma * sigma), float(sigma * sigma)])
-        noise_source = CorrelatedRandomVectorGenerator(covariance, float(small), gaussian_generator)
-
-        generator = Generator()
-        satellite = generator.addPropagator(propagator)
-
-        if meas_type == 'RANGE':
-            builder = RangeBuilder(noise_source, station, two_way, sigma, base_weight, satellite)
-        elif meas_type == 'RANGERATE':
-            builder = RangeRateBuilder(noise_source, station, two_way, sigma, base_weight, satellite)
-        elif meas_type == 'AZEL':
-            sigmaAzEl = JArray_double([sigma, sigma])
-            weightAzEl = JArray_double([base_weight, base_weight])
-            builder = AngularAzElBuilder(noise_source, station, sigmaAzEl, weightAzEl, satellite)
-
-        fixed_step_selector = FixedStepSelector(step, TimeScalesFactory.getUTC())
-        if withRefraction:
-            elevation_detector = ElevationDetector(station.getBaseFrame()).withConstantElevation(
-                elevAngle).withRefraction(EarthITU453AtmosphereRefraction(altitude)).withHandler(ContinueOnEvent())
-        else:
-            elevation_detector = ElevationDetector(station.getBaseFrame()).withConstantElevation(elevAngle).withHandler(
-                ContinueOnEvent())
-        scheduler = EventBasedScheduler(builder, fixed_step_selector, propagator, elevation_detector,
-                                        SignSemantic.FEASIBLE_MEASUREMENT_WHEN_POSITIVE)
-        generator.addScheduler(scheduler)
-
-        measurements = generator.generate(t0, tf)
-        for measObject in measurements:
+        measurementslist = []
+        for proIndex in range(len(allOrbits)):
+            gatherer = GatheringSubscriber()
+            generator = Generator()
+            generator.addSubscriber(gatherer)
+            for proIndex2 in range(len(allOrbits)): 
+                if proIndex2 == proIndex:
+                    satellite = generator.addPropagator(mainScenario.getPropagator("Get", allOrbits[proIndex2], mass, "H"))
+                else:
+                    generator.addPropagator(mainScenario.getPropagator("Get", allOrbits[proIndex2], mass, "H"))
+            fixed_step_selector = FixedStepSelector(step, TimeScalesFactory.getUTC())
+            sigma = self.stationSigma
+            base_weight = self.stationBaseWeight
+            small = 1e-10
+            random_generator = Well19937a(int(seed))
+            gaussian_generator = GaussianRandomGenerator(random_generator)
+            covariance = MatrixUtils.createRealDiagonalMatrix([float(sigma * sigma), float(sigma * sigma)])
+            noise_source = CorrelatedRandomVectorGenerator(covariance, float(small), gaussian_generator)
             if meas_type == 'RANGE':
-                meas = Range.cast_(measObject)
+                builder = RangeBuilder(noise_source, station, two_way, sigma, base_weight, satellite)
             elif meas_type == 'RANGERATE':
-                meas = RangeRate.cast_(measObject)
+                builder = RangeRateBuilder(noise_source, station, two_way, sigma, base_weight, satellite)
             elif meas_type == 'AZEL':
-                meas = AngularAzEl.cast_(measObject)
+                sigmaAzEl = JArray_double([sigma, sigma])
+                weightAzEl = JArray_double([base_weight, base_weight])
+                builder = AngularAzElBuilder(noise_source, station, sigmaAzEl, weightAzEl, satellite)
+            elif meas_type == 'RADEC':
+                sigmaRaDec = JArray_double([sigma, sigma])
+                weightRaDec = JArray_double([base_weight, base_weight])
+                builder = AngularRaDecBuilder(noise_source, station, eciFrame, sigmaRaDec, weightRaDec, satellite)
+            elif meas_type == 'GPS':
+                sigmaP = self.gpsPositionStd * 2
+                sigmaV = self.gpsVelocitystd * 2
+                GPSCov = MatrixUtils.createRealDiagonalMatrix([sigmaP, sigmaP, sigmaP, sigmaV, sigmaV, sigmaV])
+                GPSNoise = CorrelatedRandomVectorGenerator(GPSCov, float(small), gaussian_generator)
+                GPSBuilder = PVBuilder(GPSNoise, self.gpsSigma, self.gpsSigma*0.05, self.gpsBaseWeight, satellite)
+                GPSsample = BurstSelector(self.GPSMaxBurstSize, self.GPSHighRateStep, self.GPSBurstPeriod, TimeScalesFactory.getUTC())
+                GPSScheduler = ContinuousScheduler(GPSBuilder, GPSsample)
+            if meas_type == 'GPS':
+                generator.addScheduler(GPSScheduler)
             else:
-                raise ValueError("unrecognized measurement type")
-            measurementslist.append(meas)
-            if two_way:
-                way_str = "TWOWAY"
-            else:
-                way_str = "ONEWAY"
-            print("{}   {} {}       {}        {}".format(meas.getDate().toString(), way_str, meas_type, station_name,
-                                                         meas.getObservedValue()[0]))
+                if withRefraction:
+                    elevation_detector = ElevationDetector(station.getBaseFrame()).withConstantElevation(
+                        elevAngle).withRefraction(EarthITU453AtmosphereRefraction(altitude)).withHandler(ContinueOnEvent())
+                else:
+                    elevation_detector = ElevationDetector(station.getBaseFrame()).withConstantElevation(elevAngle).withHandler(
+                        ContinueOnEvent())
+                scheduler = EventBasedScheduler(builder, fixed_step_selector, 
+                                                mainScenario.getPropagator("Get", allOrbits[proIndex2], mass, "H"), 
+                                                elevation_detector,
+                                                SignSemantic.FEASIBLE_MEASUREMENT_WHEN_POSITIVE)
+                generator.addScheduler(scheduler)
+            generator.generate(t0, tf)
+            measurements = gatherer.getGeneratedMeasurements()
+            j = 0
+            measTime = []
+            for measObject in measurements:
+                j += 1
+                if meas_type == 'RANGE':
+                    meas = Range.cast_(measObject)
+                elif meas_type == 'RANGERATE':
+                    meas = RangeRate.cast_(measObject)
+                elif meas_type == 'AZEL':
+                    meas = AngularAzEl.cast_(measObject)
+                elif meas_type == 'RADEC':
+                    meas = AngularRaDec.cast_(measObject)
+                elif meas_type == 'GPS':
+                    meas = PV.cast_(measObject)
+                else:
+                    raise ValueError("unrecognized measurement type")
+                measurementslist.append(meas)
+                if j == 1:
+                    measTime.append(meas)
+                if two_way:
+                    way_str = "TWOWAY"
+                else:
+                    way_str = "ONEWAY"
+            try:
+                if meas_type == 'GPS':
+                    measTime.append(meas)
+                    print("{} number of GPS observations are generated for satellite #{}, first at: {} and last at: {}".format(j, 
+                            linkList[proIndex], measTime[0].getDate().toString(), measTime[1].getDate().toString()))
+                else:
+                    measTime.append(meas)
+                    print("{} number of {} observations are generated for satellite #{}, first at: {} and last at: {}, - station {}".format(j, 
+                        meas_type, linkList[proIndex], measTime[0].getDate().toString(), measTime[1].getDate().toString(), station_name))
+            except:
+                pass
         return measurementslist
 
     def getRangeMeasurements(self, propagator, absoluteDateTime, elevationMask):
@@ -255,9 +581,6 @@ class ssEnvironmentBuilder():
         maxStep = self.propagationMaxTimeStep
         vecAbsoluteTolerance = self.vectorAbsoluteTolerance
         vecRelativeTolerance = self.vectorRelativeTolerance
-
-
-
         moon = self.moon
         sun = self.sun
         wgs84Ellipsoid = self.wgs84Ellipsoid
@@ -269,7 +592,7 @@ class ssEnvironmentBuilder():
         if (propagatorType == 'Builder'):
             integratorBuilder = DormandPrince853IntegratorBuilder(minStep, maxStep, vecAbsoluteTolerance)
 
-            satPropagator = NumericalPropagatorBuilder(initialCartesianOrbit, integratorBuilder, PositionAngle.TRUE,
+            satPropagator = NumericalPropagatorBuilder(initialCartesianOrbit, integratorBuilder, PositionAngleType.TRUE,
                                                        1.0)
             satPropagator.setAttitudeProvider(nadirPointing)
             satPropagator.setMass(mass)
@@ -336,7 +659,7 @@ class ssEnvironmentBuilder():
         elif (propagatorCase == 3):
 
             # Earth gravity field with degree 64 and order 64
-            gravityProvider = GravityFieldFactory.getConstantNormalizedProvider(64, 64)
+            gravityProvider = GravityFieldFactory.getConstantNormalizedProvider(64, 64, self.startTime)
             gravityAttractionModel = HolmesFeatherstoneAttractionModel(ecefFrame, gravityProvider)
 
             # Third body attraction model
@@ -345,8 +668,7 @@ class ssEnvironmentBuilder():
 
             # Solar radiation pressure
             isotropicRadiationSingleCoeff = IsotropicRadiationSingleCoefficient(0.02, 1.0)
-            solarRadiationPressure = SolarRadiationPressure(sun, wgs84Ellipsoid.getEquatorialRadius(),
-                                                            isotropicRadiationSingleCoeff)
+            solarRadiationPressure = SolarRadiationPressure(sun, wgs84Ellipsoid, isotropicRadiationSingleCoeff)
 
             # Relativity
             relativity = Relativity(Constants.EIGEN5C_EARTH_MU)
@@ -410,6 +732,7 @@ class ssEnvironmentBuilder():
     def getBlueMarbleFigure(self, path):
         earthMapTextureT = np.asarray(Image.open(path.format('earth'))).T
         earthMapTexture = self.rearangeTexture(earthMapTextureT)
+        
 
         earthSphereX,earthSphereY,earthSphereZ =\
               self.sphereGenerator(Constants.WGS84_EARTH_EQUATORIAL_RADIUS,earthMapTexture)
@@ -438,7 +761,7 @@ class ssEnvironmentBuilder():
                     raan -= 360.0
                 newOrbit = KeplerianOrbit(refSat.getA(), refSat.getE(), refSat.getI(), 
                                           refSat.getPerigeeArgument(), raan * (np.pi / 180.0), 
-                                          ta * ( np.pi / 180 ), PositionAngle.TRUE,
+                                          ta * ( np.pi / 180 ), PositionAngleType.TRUE,
                                            refSat.getFrame(), refSat.getPVCoordinates().getDate(), 
                                            Constants.WGS84_EARTH_MU)
 
@@ -455,13 +778,41 @@ class ssEnvironmentBuilder():
                 reference satellite: orekit KeplerianOrbit
                 list of satellites with ISL link: list[dtype=int] length(between 1 and np*ns)
         '''
-        refSat = self.referenceOrbit
-        # allsat = [[0 for i in range(num_sat)] for i in range(num_plane)]
-        nominalLinksList = np.zeros([len(activeSats),4],dtype=int)
+
+        if (num_plane-np.floor(num_plane)!=0):
+            num_plane = np.floor(num_plane)
+
+        if (num_sat-np.floor(num_sat)!=0):
+            num_sat = np.floor(num_sat)
+        
+        if (F-np.floor(F)!=0):
+            F = np.floor(F)
+        
+        if F < 0 :
+            F = 0
+
+        if F > num_plane:
+            F = num_plane
+        
+
+        for i in range(len(activeSats)):
+            if (activeSats[i]-np.floor(activeSats[i])!=0 ):
+                activeSats[i]=np.floor(activeSats[i])
+            if  activeSats[i] < 0:
+                 activeSats[i] = 0
+
+            if  activeSats[i] > num_plane*num_sat:
+                 activeSats[i] = num_plane*num_sat   
+
+        activeSats = np.unique((activeSats))
+
+        nominalLinksList = np.zeros([len(activeSats),5],dtype=int)
         allContributedSatellitesList = []
         selectedOrbitsIndexes = []
         selectedOrbits = []
         orbits = []
+
+        refSat = self.referenceOrbit
         raan0 = refSat.getRightAscensionOfAscendingNode() * (180.0 / np.pi)
         ta0 = refSat.getTrueAnomaly() * (180.0 / np.pi)
         for i in range(num_plane):
@@ -474,57 +825,62 @@ class ssEnvironmentBuilder():
                     raan -= 180.0
                 newOrbit = KeplerianOrbit(refSat.getA(), refSat.getE(), refSat.getI(),
                                           refSat.getPerigeeArgument(), raan * (np.pi / 180.0),
-                                          ta * (np.pi / 180), PositionAngle.TRUE,
+                                          ta * (np.pi / 180), PositionAngleType.TRUE,
                                           refSat.getFrame(), refSat.getPVCoordinates().getDate(),
                                           Constants.WGS84_EARTH_MU)
-                
                 orbits.append(newOrbit)
-        
+        print(" ")
+        print("walker-star constellation created ({}, {}, {}).".format(num_sat*num_plane, num_plane, F))
+
         for i in range(len(activeSats)):
             currentSatellite = activeSats[i]
-            
+            nominalLinksList[i , 0] = currentSatellite
             # finding neigbhor satellites 
-            currentPlane = np.floor(currentSatellite/num_sat) + 1
+            currentPlane = int(np.floor((currentSatellite - 1)/(num_sat) ) + 1)
 
             if (currentPlane == 1):
-                nominalLinksList[i, 3] = -1
-                neighbourPlanes = [ currentPlane + 1, -1] 
-                nominalLinksList[i, 2] = currentSatellite + num_sat
-            elif (currentPlane == num_plane):
-                nominalLinksList[i, 3] = -1
-                neighbourPlanes = [ currentPlane - 1 , -1]
-                nominalLinksList[i, 2] = currentSatellite - num_sat
-            else: 
-                neighbourPlanes = [ currentPlane - 1 , currentPlane + 1]
-                nominalLinksList[i, 2] = currentSatellite - num_sat
+                nominalLinksList[i, 1] = -1
                 nominalLinksList[i, 3] = currentSatellite + num_sat
-
-
-
+            elif (currentPlane == num_plane):
+                nominalLinksList[i, 1] = currentSatellite - num_sat
+                nominalLinksList[i, 3] = -1
+            else: 
+                nominalLinksList[i, 1] = currentSatellite - num_sat
+                nominalLinksList[i, 3] = currentSatellite + num_sat
+            
             if  (currentSatellite == (currentPlane - 1)*num_sat + 1):
-                nominalLinksList[i, 0] = currentSatellite + 1
-                nominalLinksList[i, 1] = currentSatellite + num_sat - 1
+                nominalLinksList[i, 2] = currentSatellite + 1
+                nominalLinksList[i, 4] = currentSatellite + num_sat - 1
             elif (currentSatellite == currentPlane*num_sat):
-                nominalLinksList[i, 0] = currentSatellite - 1
-                nominalLinksList[i, 1] = currentSatellite - num_sat + 1
+                nominalLinksList[i, 2] = currentSatellite - num_sat + 1
+                nominalLinksList[i, 4] = currentSatellite - 1
             else:
-                nominalLinksList[i, 0] = currentSatellite - 1
-                nominalLinksList[i, 1] = currentSatellite + 1
+                nominalLinksList[i, 2] = currentSatellite + 1
+                nominalLinksList[i, 4] = currentSatellite - 1
+
+            print(" ")
+            print("Satellite {} is equipped with ISL links: {}".format(currentSatellite , nominalLinksList[i , 1:]))
+            print("         {}         ".format(nominalLinksList[i, 2]))
+            print("          |          ")
+            print("          |          ")
+            print("{}-------{}---------{}".format(nominalLinksList[i, 1], nominalLinksList[i, 0], nominalLinksList[i, 3]))
+            print("          |          ")
+            print("          |          ")
+            print("         {}          ".format(nominalLinksList[i, 4]))
             
         for i in range(len(activeSats)):
             allContributedSatellitesList.append(activeSats[i])
             for j in range(4):
-                if nominalLinksList[i, j] == -1:
+                if nominalLinksList[i , j + 1] == -1:
                     pass
                 else:
-                    allContributedSatellitesList.append(nominalLinksList[i, j])
+                    allContributedSatellitesList.append(nominalLinksList[i, j + 1])
         uniqueIndexes = np.unique(np.array(allContributedSatellitesList))
         for i in range(len(uniqueIndexes)):
             selectedOrbits.append(orbits[uniqueIndexes[i] - 1])
             selectedOrbitsIndexes.append(uniqueIndexes[i])
-        
-        return orbits, selectedOrbits,selectedOrbitsIndexes, nominalLinksList
 
+        return orbits, selectedOrbits, selectedOrbitsIndexes, nominalLinksList
 
 class MyObserver(PythonBatchLSObserver):
     def evaluationPerformed(self, itCounts,
@@ -532,269 +888,91 @@ class MyObserver(PythonBatchLSObserver):
                             measParams, provider, lspEval):
         print(itCounts)
 
-
-
 # building scenario
 mainScenario = ssEnvironmentBuilder()
+duration = mainScenario.duration
+mainScenario.addReferenceOrbit(700000.0, 0.0, 89.46, 0.0, 0.0, 0.0)
+#mainScenario.feedGroundStations(["Tabriz", "Boushehr", "Bandar Abbas", "Mashhad"])
 
-mainScenario.addReferenceOrbit(700000.0, 0.0, 89.0, 0.0, 0.0, 0.0)
-
-mainScenario.addGroundStation(30.0, 48.5, 0.0, "Boushehr")
-mainScenario.addGroundStation(35.0, 51.0, 0.0, "Tehran")
-#### mainScenario.addGroundStation(30.0, 50.0, 0.0, "Boushehr")
-#### mainScenario.addGroundStation(33.0, 48.0, 1500.0, "Aleshtar")
-# mainScenario.addGroundStation(25.0, 59.0, 0.0, "Bandar Abbas")
-# mainScenario.addGroundStation(35.0, 58.0, 0.0, "Mashhad")
-# mainScenario.addGroundStation(38.0, 46.0, 0.0, "Tabriz")
-# mainScenario.addGroundStation(27.0, 63.0, 0.0, "Sistan")
-
-underODSatellites = [30]
+underODSatellites = [100]
 starConstellation, activeSatellites, selectedOrbitsIndexes, linkList = \
     mainScenario.buildISLStar( 15, 28, 1, underODSatellites)
 
+if mainScenario.showActiveSatellites:
+    mainScenario.displayActiveSatellitesConfiguration(activeSatellites, selectedOrbitsIndexes, linkList)
 
-'''
-earhtMarbleFigure = mainScenario.getBlueMarbleFigure('earth.jpeg')
-epochECI2ECEF = mainScenario.eciFrame.getTransformTo(mainScenario.ecefFrame, mainScenario.startTime)
-constellationX = []
-constellationY = []
-constellationZ = []
-for j in range(len(activeSatellites)):
-    eciPos = activeSatellites[j].getPVCoordinates().getPosition()
-    truePositionECEF = epochECI2ECEF.getRotation().applyTo(eciPos)
-    constellationX.append(truePositionECEF.getX())
-    constellationY.append(truePositionECEF.getY())
-    constellationZ.append(truePositionECEF.getZ())
-earhtMarbleFigure.add_trace(go.Scatter3d(x = constellationX, 
-                                    y = constellationY, 
-                                     z = constellationZ,  mode='markers'))
-earhtMarbleFigure.update_coloraxes(showscale=False)
-earhtMarbleFigure.update_layout(showlegend=False)
-pio.show(earhtMarbleFigure)
-'''
+underODOrbits = []
+linkedOrbits = []
+allOrbits = []
 
+for i in range(len(underODSatellites)):
+    underODOrbits.append(starConstellation[underODSatellites[i] - 1])
+    allOrbits.append(starConstellation[underODSatellites[i] - 1])
+    linkedTemp = []
+    for j in range(len(linkList[i])):
+        if (linkList[i, j] != -1) and (linkList[i, j] != underODSatellites[i]):
+            linkedTemp.append(starConstellation[int(linkList[i, j] - 1)])
+            allOrbits.append(starConstellation[int(linkList[i, j] - 1)])
+        else:
+            pass
+    linkedOrbits.append(linkedTemp)
 
+underODPropagators = []
+linkedPropagators = []
+for i in range(len(underODOrbits)):
+    underODPropagators.append(mainScenario.getPropagator("Get", underODOrbits[i], 100.0, "H"))
+    linkedTemp = []
+    lt = linkedOrbits[i]
+    for j in range(len(lt)):
+        linkedTemp.append(mainScenario.getPropagator("Get", lt[j], 100.0, "H"))
+    linkedPropagators.append(linkedTemp) 
 
-propagatorsList = []
+propBuilder = []
+propBuilder.append(mainScenario.getPropagator("Builder", underODOrbits[0], 100.0, "H"))
 
-for i in range(len(activeSatellites)):
-    propagatorsList.append(mainScenario.getPropagator("Get", activeSatellites[i], 100.0, "H"))
+thisLinkList = linkList[0]
+linked = linkedOrbits[0]
+for i in range(len(linked)):
+    propBuilder.append(mainScenario.getPropagator("Builder", linked[i], 100.0, "H"))
 
+thisEstimator = mainScenario.getPodEstimator(propBuilder)
+ODStartTime = underODOrbits[0].getDate()
 
-for i in range(mainScenario.numberOfGroundStation):
-    meas = ssEnvironmentBuilder.generate_measurements(sat1RealPropagator, this_cons.groundStationsList[i], str(i), 0.0,
-                                      5.0 * np.pi / 180.0, "RANGERATE",
-                                      currentDateTime, 1.0)
+linked = []
+linked = linkedPropagators[0]
 
+if mainScenario.isISL:
+    mainScenario.feedIslMeasurements(thisEstimator, underODPropagators[0], linked, ODStartTime, duration, 'Range', thisLinkList)
+    mainScenario.feedIslMeasurements(thisEstimator, underODPropagators[0], linked, ODStartTime, duration, 'Phase', thisLinkList)
 
+mainScenario.feedPodMeasurements(thisEstimator,allOrbits, ODStartTime, duration, "GPS", thisLinkList)
 
-
-
-
-
-
-
-sat1EstimatedPropagatorBuilder = ssEnvironmentBuilder.ExGetPropagator("Builder", initialEstimatedOrbitSat1, 100.0,
-                                                      eciFrame, ecefFrame, "H", prop_min_step, prop_max_step,
-                                                      prop_position_error, prop_position_error)
-
-# aa = FiniteDifferencePropagatorConverter(sat1EstimatedPropagatorBuilder, 1e-3, 1000)
-# aa.convert()
-
-sat2EstimatedPropagatorBuilder = ssEnvironmentBuilder.ExGetPropagator("Builder", initialEstimatedOrbitSat2, 100.0,
-                                                      eciFrame, ecefFrame, "H", prop_min_step, prop_max_step,
-                                                      prop_position_error, prop_position_error)
-
-estimator_convergence_thres = 1e-5
-estimator_max_iterations = 25
-estimator_max_evaluations = 35
-
-matrixDecomposer = QRDecomposer(1e-11)
-optimizer = GaussNewtonOptimizer(matrixDecomposer, False)
-sat1Estimator = BatchLSEstimator(optimizer, sat1EstimatedPropagatorBuilder)
-sat1Estimator.setParametersConvergenceThreshold(estimator_convergence_thres)
-sat1Estimator.setMaxIterations(estimator_max_iterations)
-sat1Estimator.setMaxEvaluations(estimator_max_evaluations)
-
-##########################################################
-# Station Filter
-
-range_weight = 0.01  # Will be normalized later (i.e divided by the number of observations)
-range_sigma = 0.01  # Estimated covariance of the range measurements, in meters
-
-isTwoWay = True
-currentDateTime = startTime
-
-
-
-
-for i in range(this_cons.numberOfGroundStation):
-    meas = ssEnvironmentBuilder.generate_measurements(sat1RealPropagator, this_cons.groundStationsList[i], str(i), 0.0,
-                                      5.0 * np.pi / 180.0, "RANGERATE",
-                                      currentDateTime, 1.0)
-    for m in meas:
-        sat1Estimator.addMeasurement(m)
-"""
-while currentDateTime.compareTo(endTime) <= 0:
-    meas = this_cons.getRangeMeasurements(sat1RealPropagator, currentDateTime, elevationMask)
-    currentDateTime = currentDateTime.shiftedBy(1.0)
-    for m in meas:
-        sat1Estimator.addMeasurement(m)
-"""
-
-sat1Estimator.setObserver(MyObserver())
-print("Measurements feeded")
-sat1EstimatedPropagator = sat1Estimator.estimate()[0]
-sat1EstimatedInitialState = sat1EstimatedPropagator.getInitialState()
-sat1EstimatedPropagator.resetInitialState(sat1EstimatedInitialState)
-sat1EphemerisGenerator = sat1EstimatedPropagator.getEphemerisGenerator()
-
-# Propagating from 1 day before data collection
-# To 1 week after orbit determination (for CPF generation)
-sat1EstimatedPropagator.propagate(startTime.shiftedBy(0.0), startTime.shiftedBy(2 * 3600.0 + 300))
-sat1BoundedPropagator = sat1EphemerisGenerator.getGeneratedEphemeris()
-initialState = sat1BoundedPropagator.getInitialState()
-
-'''
-brdctFirstGuess = AbstractNavigationMessage(Constants.WGS84_EARTH_MU, Constants.WGS84_EARTH_ANGULAR_VELOCITY, 10)
-brdctFirstGuess.setSma(initialState.getA())
-brdctFirstGuess.setSma(initialState.getE())
-brdctFirstGuess.setI0(initialState.getI())
-brdctFirstGuess.setTime(0.0)
-brdctFirstGuess.setDate(initialState.getDate())
-brdctFirstGuess.setPRN(1)
-brdctFirstGuess.setM0(initialState.getKeplerianMeanMotion())
-
-a = GNSSPropagatorBuilder(brdctFirstGuess)
-'''
-
-
-currentDateTime = startTime.shiftedBy(0.0)
-endTime = startTime.shiftedBy(2 * 3600.0 + 300.0)
-
-position_norm_resi = pd.DataFrame(columns=['PositionNormError'])
-truePositionDataFrame = pd.DataFrame(columns=['x', 'y', 'z'])
-truePositionECEFDataFrame = pd.DataFrame(columns=['x', 'y', 'z'])
-estimatedPositionDataFrame = pd.DataFrame(columns=['x', 'y', 'z'])
-
-while currentDateTime.compareTo(endTime) <= 0:
-    thisECI2ECEF = eciFrame.getTransformTo(ecefFrame, currentDateTime)
-    
-    truePosition = sat1RealPropagator.propagate(currentDateTime).getPVCoordinates().getPosition()
-    truePositionECEF = thisECI2ECEF.getRotation().applyTo(truePosition)
-    estimatedPosition = sat1BoundedPropagator.propagate(currentDateTime).getPVCoordinates().getPosition()
-    positionDifference = truePosition.subtract(estimatedPosition)
-    errorInLVLH = LOFType.LVLH.rotationFromInertial(sat1RealPropagator.propagate(currentDateTime).getPVCoordinates()).applyTo(positionDifference)
-    norm_resi = errorInLVLH.getNorm()
-
-    truePositionDataFrame.loc[absolutedate_to_datetime(currentDateTime)] = \
-        [truePosition.getX(), truePosition.getY(), truePosition.getZ()]
-    truePositionECEFDataFrame.loc[absolutedate_to_datetime(currentDateTime)] = \
-        [truePositionECEF.getX(), truePositionECEF.getY(), truePositionECEF.getZ()]
-    estimatedPositionDataFrame.loc[absolutedate_to_datetime(currentDateTime)] = \
-        [estimatedPosition.getX(), estimatedPosition.getY(), estimatedPosition.getZ()]
-    position_norm_resi.loc[absolutedate_to_datetime(currentDateTime)] = norm_resi
-    print(norm_resi)
-    currentDateTime = currentDateTime.shiftedBy(10.0)
-
-trace = go.Scattergl(
-    x=position_norm_resi.index, y=position_norm_resi['PositionNormError'],
-    mode='markers',
-    name='PositionNormError'
-)
-
-truePositionTrace = go.Scatter3d( x = truePositionDataFrame['x'], 
-                                  y = truePositionDataFrame['y'],
-                                  z = truePositionDataFrame['z'])
-estimatedPositionTrace = go.Scatter3d( x = estimatedPositionDataFrame['x'], 
-                                        y = estimatedPositionDataFrame['y'],
-                                        z = estimatedPositionDataFrame['z'])
-truePositionECEFFigure = earhtMarbleFigure.add_trace(go.Scatter3d( x = truePositionECEFDataFrame['x'], 
-                                                                y = truePositionECEFDataFrame['y'],
-                                                                z = truePositionECEFDataFrame['z']))
-
-data = [trace]
-
-#tdLayout = go.Layout(title='3d trace',
-#                      xaxis=dict(title='x [km]'), 
-#                      yaxis=dict(title='y [km]'), 
-#                      zaxis=dict(title='z [km]') )
-
-layout = go.Layout(title='Position residuals', 
-                   xaxis=dict(title='Datetime UTC'), 
-                   yaxis=dict(title='Position residual (m)') )
-
-fig = dict(data=data, layout=layout)
-truePositionFigure = dict(data=truePositionTrace)
-estimatedPositionFigure = dict(data=estimatedPositionTrace)
-combinedFigure = dict(data=[truePositionTrace, estimatedPositionTrace])
-
-# pio.write_image(fig, "file.png", height=1200, width=1600,scale=1)
-pio.show(fig)
-pio.show(truePositionECEFFigure)
-pio.show(truePositionFigure)
-pio.show(estimatedPositionFigure)
-pio.show(combinedFigure)
-
-sat2Estimator = BatchLSEstimator(optimizer, sat2EstimatedPropagatorBuilder)
-sat2Estimator.setParametersConvergenceThreshold(estimator_convergence_thres)
-sat2Estimator.setMaxIterations(estimator_max_iterations)
-sat2Estimator.setMaxEvaluations(estimator_max_evaluations)
-sat2Estimator.setObserver(MyObserver())
-currentDateTime = startTime.shiftedBy(300.0)
-endTime = startTime.shiftedBy(3600.0 + 300.0)
-while currentDateTime.compareTo(endTime) <= 0:
-    inter_range = sat2RealPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().distance(
-        sat1RealPropagator.propagate(currentDateTime).getPVCoordinates().getPosition())
-    oneway_meas = OneWayGNSSRange(sat1BoundedPropagator, 0.0,
-                                  currentDateTime,
-                                  inter_range,
-                                  1.0,
-                                  1.0,
-                                  ObservableSatellite(0))
-    currentDateTime = currentDateTime.shiftedBy(1.0)
-    sat2Estimator.addMeasurement(oneway_meas)
-
-sat2EstimatedPropagator = sat2Estimator.estimate()[0]
-sat2EstimatedInitialState = sat2EstimatedPropagator.getInitialState()
-sat2EstimatedPropagator.resetInitialState(sat2EstimatedInitialState)
-sat2EphemerisGenerator = sat2EstimatedPropagator.getEphemerisGenerator()
-sat2EstimatedPropagator.propagate(startTime.shiftedBy(300.0), startTime.shiftedBy(2 * 3600.0 + 300))
-sat2BoundedPropagator = sat2EphemerisGenerator.getGeneratedEphemeris()
-currentDateTime = startTime.shiftedBy(300.0)
-endTime = startTime.shiftedBy(2 * 3600.0 + 300.0)
-position_norm_resi = pd.DataFrame(columns=['PositionNormError'])
-while currentDateTime.compareTo(endTime) <= 0:
-    x_resi = (sat2RealPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().getX() -
-              sat2BoundedPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().getX())
-    y_resi = (sat2RealPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().getY() -
-              sat2BoundedPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().getY())
-    z_resi = (sat2RealPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().getZ() -
-              sat2BoundedPropagator.propagate(currentDateTime).getPVCoordinates().getPosition().getZ())
-    norm_resi = (x_resi ** 2 + y_resi ** 2 + z_resi ** 2) ** 0.5
-    position_norm_resi.loc[absolutedate_to_datetime(currentDateTime)] = norm_resi
-    print(norm_resi)
-    currentDateTime = currentDateTime.shiftedBy(10.0)
-
-trace = go.Scattergl(
-    x=position_norm_resi.index, y=position_norm_resi['PositionNormError'],
-    mode='markers',
-    name='PositionNormError'
-)
-
-data = [trace]
-
-layout = go.Layout(
-    title='Position residuals',
-    xaxis=dict(
-        title='Datetime UTC'
-    ),
-    yaxis=dict(
-        title='Position residual (m)'
-    )
-)
-
-fig = dict(data=data, layout=layout)
-
-pio.show(fig)
-# pio.write_image(fig, "test.svg", width=1.5*300, height=0.75*300, scale=1)
+estimatorOutput = thisEstimator.estimate()
+estimatedOrbits = []
+estimatedPropagators = []
+realPropagatores = []
+for indx in range(len(propBuilder)):
+    thisOrbit = []
+    thisOrbit = estimatorOutput[indx].getInitialState().getOrbit()
+    estimatedOrbits.append(estimatorOutput[indx].getInitialState().getOrbit())
+    midEstProp = mainScenario.getPropagator("Get", thisOrbit, 100.0, "H")
+    midRealProp = mainScenario.getPropagator("Get", allOrbits[indx], 100.0, "H")
+    estEphemerisGenerator = midEstProp.getEphemerisGenerator()
+    realEphemerisGenerator = midRealProp.getEphemerisGenerator()
+    midEstProp.propagate(mainScenario.startTime, mainScenario.endTime)
+    midRealProp.propagate(mainScenario.startTime, mainScenario.endTime)
+    estimatedPropagators.append(estEphemerisGenerator.getGeneratedEphemeris())
+    realPropagatores.append(realEphemerisGenerator.getGeneratedEphemeris())
+    ricposdiff = mainScenario.getRICPositionDifference(realPropagatores[indx], estimatedPropagators[indx],
+                                                        mainScenario.startTime, mainScenario.endTime, mainScenario.plotStepTime)
+    if mainScenario.isISL:
+        additionalFigureInfo = 'ISL is ON, ISL sigma = ' + str(mainScenario.islSigma) + \
+        ', ISL BaseWeight = ' + str(mainScenario.islBaseWeight) + ', GPS sigma = ' + str(mainScenario.gpsSigma) + \
+        ', GPS BaseWeight = ' + str(mainScenario.gpsBaseWeight) + ', GPS noise sigma = ' + str(mainScenario.gpsPositionStd) + \
+            ',  for Sat:#' +  str(thisLinkList[indx])
+    else:
+        additionalFigureInfo = 'ISL is OFF, GPS sigma = ' + str(mainScenario.gpsSigma) + \
+        ', GPS BaseWeight = ' + str(mainScenario.gpsBaseWeight) + ' GPS noise sigma = ' + str(mainScenario.gpsPositionStd) + \
+            ',  for Sat:#' +  str(thisLinkList[indx])
+    resifig = mainScenario.getResidualFigure(ricposdiff, additionalFigureInfo)
+    pio.show(resifig)
