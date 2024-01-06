@@ -82,8 +82,8 @@ class ssEnvironmentBuilder():
         super().__init__()       
         self.utc = TimeScalesFactory.getUTC()
         self.startTime = AbsoluteDate(2020, 8, 13, 19, 0, 0.0, self.utc)
-        self.duration = 20 / 60
-        self.durationAfterEstimation = 90.0 / 60.0 
+        self.duration = 10 / 60
+        self.durationAfterEstimation = 45.0 / 60.0 
         self.endEstimation = self.startTime.shiftedBy(self.duration * 3600.0)
         self.endTime = self.endEstimation.shiftedBy(self.durationAfterEstimation * 3600.0)
         self.plotStepTime = 1.0
@@ -92,7 +92,7 @@ class ssEnvironmentBuilder():
         self.DEG2RAD = (np.pi / 180)
         self.nominalAltitudes = [600, 800] # range
 
-        self.showActiveSatellites = True
+        self.showActiveSatellites = False
 
 
         self.rangeMaxError = 0.001
