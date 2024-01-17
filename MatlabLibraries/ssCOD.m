@@ -1,5 +1,5 @@
 classdef ssCOD
-    % Copyright © 2002-2023 CS GROUP
+    % Copyright © 2002-2024 CS GROUP
     % @author: Siavash Sabzy (signature: ss...)
     % https://github.com/siavashsabzy
 
@@ -58,6 +58,7 @@ classdef ssCOD
         BLSestimatorMaxEvaluations
         elevationMask
         mass
+        islWaveLength
     end
 
 
@@ -585,7 +586,7 @@ classdef ssCOD
 
     methods
 
-        function obj = ssCOD()
+        function obj = ssCOD(inputStructure)
             import org.orekit.time.*;
             import java.io.File;
             import org.orekit.data.*;
@@ -593,88 +594,97 @@ classdef ssCOD
             import org.orekit.models.earth.*;
             import org.orekit.bodies.*;
             import org.orekit.utils.*;
-            DM=org.orekit.data.DataContext.getDefault().getDataProvidersManager();
+            import org.orekit.orbits.*;
+            import org.orekit.gnss.*;
+            DM = org.orekit.data.DataContext.getDefault().getDataProvidersManager();
             crawler = org.orekit.data.DirectoryCrawler(File('C:\sabzy\sabzyJava\OrekitLib\'));
             DM.clearProviders()
             DM.addProvider(crawler)
-            obj.ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, IERSConventions.IERS_2010, true);
+            obj.ecefFrame = FramesFactory.getITRF(ITRFVersion.ITRF_2014, ...
+                IERSConventions.IERS_2010, true);
             obj.eciFrame = FramesFactory.getGCRF();
-            obj.startTime = AbsoluteDate(2020, 8, 13, 19, 0, 0.0, TimeScalesFactory.getUTC());
-            obj.duration = 20.0 / 60;
-            obj.durationAfterEstimation = 120.0 / 60.0;
-            obj.endEstimation = obj.startTime.shiftedBy(obj.duration * 3600.0);
-            obj.endTime = obj.endEstimation.shiftedBy(obj.durationAfterEstimation * 3600.0);
-
-            obj.plotStepTime = 1.0;
-
             obj.RAD2DEG = (180 / pi);
             obj.DEG2RAD = (pi / 180);
-            obj.nominalAltitudes = [600, 800];
-
-            obj.showActiveSatellites = false;
-
-            obj.rangeMaxError = 0.001;
-
-            obj.rangeSigma = 0.01;
-            obj.rangeWeight = 0.1;
-            obj.stationSigma = 0.004; % RangeRate sigma
-            obj.stationBaseWeight = 1.0;
-            obj.stationisTwoWay = true;
-            obj.stationRefractio = true;
-            obj.stationSampleTime = 1.0;
-            obj.stationStd = 0.001;
-
-            obj.noiseSeed = 1;
-
-
-            obj.isISL = true;
-            obj.islSigma = 0.005;      % filter parameter
-            obj.islBaseWeight = 4.0;    % filter parameter
-            obj.isTwoWay = true;        % Observation parameter
-            obj.islSampleTime = 0.10;   % Observation parameter
-            obj.islScheduler = 'Continouos'; % alternative 'InView'
-            obj.islStd = 0.0001;        % Environment parameter
-
-            obj.gpsSampleTime = 1.0;    % Observation parameter
-            obj.gpsSigma = 1.8;         % filter parameter
-            obj.gpsBaseWeight = 1.0;    % filter parameter
-            obj.gpsPositionStd = 100.0; % GPS Position Error ~ 3-sigma: 100 [m]
-            obj.gpsVelocitystd = obj.gpsPositionStd / 20; % GPS Velocity Error
-            obj.GPSMaxBurstSize = 1;    % maximum number of selected dates in a burst
-            obj.GPSHighRateStep = 1.0 * obj.gpsSampleTime; % step between two consecutive dates within a burst (s)
-            obj.GPSBurstPeriod  = 1.0 * obj.gpsSampleTime; % period between the start of each burst (s)
-
+            obj.wgs84Ellipsoid = ReferenceEllipsoid.getWgs84(obj.ecefFrame);
+            obj.moon = CelestialBodyFactory.getMoon();
+            obj.sun = CelestialBodyFactory.getSun();
             obj.groundStationsList = [];
             obj.numberOfGroundStation = 0;
             obj.spacecraftsList = [];
             obj.propagatorsList = [];
-
-            import org.orekit.orbits.*;
-            obj.mass = 100.0;
-            obj.referenceOrbit = KeplerianOrbit(Constants.WGS84_EARTH_EQUATORIAL_RADIUS + 1100000.0, ...
-                0.0,  ...
-                83.00 * (pi / 180),  ...
-                0.0 * (pi / 180),  ...
-                0.0 * (pi / 180),  ...
-                0.0 * (pi / 180),  ...
+            tV = inputStructure.startTimeVector;
+            obj.startTime = AbsoluteDate(tV(1), tV(2), tV(3), tV(4), tV(5),...
+                tV(6), TimeScalesFactory.getUTC());
+            obj.duration = inputStructure.OdDurationInMinutes / 60; % duration in hours
+            obj.durationAfterEstimation = ...
+                inputStructure.durationAfterEstimation / 60.0; % after estimation in hours
+            obj.endEstimation = obj.startTime.shiftedBy(obj.duration * 3600.0); % final estimation time
+            obj.endTime = obj.endEstimation.shiftedBy(obj.durationAfterEstimation * 3600.0); % final getting results time
+            obj.plotStepTime = inputStructure.plotStepTime; % in sec
+            obj.mass = inputStructure.satelliteMass;
+            obj.referenceOrbit = KeplerianOrbit(...
+                Constants.WGS84_EARTH_EQUATORIAL_RADIUS + ...
+                (inputStructure.orbitAltitude * 1000), ...
+                inputStructure.orbitEccentricity,  ...
+                inputStructure.orbitInclination * obj.DEG2RAD,  ...
+                inputStructure.orbitPregeeArgument * obj.DEG2RAD,  ...
+                inputStructure.orbitRaan * obj.DEG2RAD,  ...
+                inputStructure.orbitTrueAnomaly * obj.DEG2RAD,  ...
                 PositionAngleType.TRUE, ...
                 obj.eciFrame, ...
                 obj.startTime,  ...
                 Constants.WGS84_EARTH_MU);
+            obj.nominalAltitudes = [inputStructure.orbitAltitude - 100,...
+                inputStructure.orbitAltitude + 100];
+            obj.noiseSeed = inputStructure.noiseSeed;
+            obj.elevationMask = inputStructure.maskAngle * obj.DEG2RAD; % rad
 
-            obj.wgs84Ellipsoid = ReferenceEllipsoid.getWgs84(obj.ecefFrame);
-            obj.moon = CelestialBodyFactory.getMoon();
-            obj.sun = CelestialBodyFactory.getSun();
-            % Orbit propagator parameters
-            obj.propagationMinTimeStep = 0.5;  % s
-            obj.propagationMaxTimeStep = 2.0;  % stimestep
-            obj.vectorAbsoluteTolerance = 3.0; % m
-            obj.vectorRelativeTolerance = 3.0; % m
+             % Orbit propagator parameters
+            obj.propagationMinTimeStep = inputStructure.propagationMinTimeStep;  % s
+            obj.propagationMaxTimeStep = inputStructure.propagationMaxTimeStep;  % stimestep
+            obj.vectorAbsoluteTolerance = inputStructure.vectorAbsoluteTolerance; % m
+            obj.vectorRelativeTolerance = inputStructure.vectorRelativeTolerance; % m
+
             % other filter parameters
-            obj.BLSestimatorConvergenceThreshold = 1e-5;
-            obj.BLSestimatorMaxIterations = 25;
-            obj.BLSestimatorMaxEvaluations = 35;
-            obj.elevationMask = 5.0 * pi / 180.0; % radian(s)
+            obj.BLSestimatorConvergenceThreshold = inputStructure.BLSestimatorConvergenceThreshold;
+            obj.BLSestimatorMaxIterations = inputStructure.BLSestimatorMaxIterations;
+            obj.BLSestimatorMaxEvaluations = inputStructure.BLSestimatorMaxEvaluations;
+            obj.showActiveSatellites = inputStructure.showActiveSatellites;
+
+            obj.rangeMaxError = inputStructure.stationRangeMaxError;
+            obj.rangeSigma = inputStructure.stationRangeSigma;
+            obj.rangeWeight = inputStructure.stationRangeWeight;
+            obj.stationSigma = inputStructure.stationSigma; % RangeRate sigma
+            obj.stationBaseWeight = inputStructure.stationBaseWeight;
+            obj.stationisTwoWay = inputStructure.stationisTwoWay;
+            obj.stationRefractio = inputStructure.stationRefraction;
+            obj.stationSampleTime = inputStructure.stationSampleTime;
+            obj.stationStd = inputStructure.stationStd;
+
+            obj.gpsSampleTime = inputStructure.gpsSampleTime;    % Observation parameter
+            obj.gpsSigma = inputStructure.gpsSigma;         % filter parameter
+            obj.gpsBaseWeight = inputStructure.gpsBaseWeight;    % filter parameter
+            obj.gpsPositionStd = inputStructure.gpsPositionStd; % GPS Position Error ~ 3-sigma: 100 [m]
+            obj.gpsVelocitystd = inputStructure.gpsVelocitystd; % GPS Velocity Error
+            obj.GPSMaxBurstSize = 1;    % maximum number of selected dates in a burst
+            obj.GPSHighRateStep = 1.0 * obj.gpsSampleTime; % step between two consecutive dates within a burst (s)
+            obj.GPSBurstPeriod  = 1.0 * obj.gpsSampleTime; % period between the start of each burst (s)
+
+            obj.isISL = inputStructure.isISL;
+            obj.islSigma = inputStructure.islSigma;      % filter parameter
+            obj.islBaseWeight = inputStructure.islBaseWeight;    % filter parameter
+            obj.isTwoWay = inputStructure.isTwoWay;        % Observation parameter
+            obj.islSampleTime = inputStructure.islSampleTime;   % Observation parameter
+            obj.islScheduler = inputStructure.islScheduler; % alternative 'InView'
+            obj.islStd = inputStructure.islStd;        % Environment parameter
+
+            if strcmpi(inputStructure.islLink, 'G01')
+                obj.islWaveLength = Frequency.G01.getWavelength();
+            elseif strcmpi(inputStructure.islLink, 'G05')
+                obj.islWaveLength = Frequency.G05.getWavelength();
+            end
+
+
         end
 
         function satEstimator = getPodEstimator(obj, propagatorBuilder)
@@ -846,7 +856,7 @@ classdef ssCOD
             import org.orekit.forces.drag.*;
             import org.orekit.forces.radiation.*;
             import org.orekit.utils.*;
-            minStep = obj.propagationMaxTimeStep;
+            minStep = obj.propagationMinTimeStep;
             maxStep = obj.propagationMaxTimeStep;
             vecAbsoluteTolerance = obj.vectorAbsoluteTolerance;
             vecRelativeTolerance = obj.vectorRelativeTolerance;
@@ -966,7 +976,7 @@ classdef ssCOD
             import org.orekit.propagation.events.*;
             initIslTime = startTime;
             finalIslTime = initIslTime.shiftedBy(duration * 3600.0);
-            small = 1e-10;
+            small = 1e-18;
             seed = obj.noiseSeed;
             random_generator = Well19937a(seed);
             gaussian_generator = GaussianRandomGenerator(random_generator);
@@ -996,7 +1006,7 @@ classdef ssCOD
                         obj.islSigma, obj.islBaseWeight);
                 else
                     Builder = InterSatellitesPhaseBuilder(noise_source, satellite, ...
-                        Rsatellites(j), Frequency.G01.getWavelength(), ...
+                        Rsatellites(j), obj.islWaveLength, ...
                         obj.islSigma, obj.islBaseWeight);
                 end
                 if strcmpi(obj.islScheduler,'InView')
@@ -1068,11 +1078,11 @@ classdef ssCOD
                     weightRaDec = JArray_double([base_weight, base_weight]);
                     builder = AngularRaDecBuilder(noise_source, station, eciFrame, sigmaRaDec, weightRaDec, satellite);
                 elseif strcmpi(meas_type,'GPS')
-                    sigmaP = obj.gpsPositionStd * 2;
-                    sigmaV = obj.gpsVelocitystd * 2;
+                    sigmaP = obj.gpsPositionStd ^ 2;
+                    sigmaV = obj.gpsVelocitystd ^ 2;
                     GPSCov = MatrixUtils.createRealDiagonalMatrix([sigmaP, sigmaP, sigmaP, sigmaV, sigmaV, sigmaV]);
                     GPSNoise = CorrelatedRandomVectorGenerator(GPSCov, (small), gaussian_generator);
-                    GPSBuilder = PVBuilder(GPSNoise, obj.gpsSigma, obj.gpsSigma*0.05, obj.gpsBaseWeight, satellite);
+                    GPSBuilder = PVBuilder(GPSNoise, obj.gpsSigma, obj.gpsSigma*0.01, obj.gpsBaseWeight, satellite);
                     GPSsample = BurstSelector(obj.GPSMaxBurstSize, obj.GPSHighRateStep, obj.GPSBurstPeriod, TimeScalesFactory.getUTC());
                     GPSScheduler = ContinuousScheduler(GPSBuilder, GPSsample);
                 end
@@ -1261,9 +1271,9 @@ classdef ssCOD
             axis off
         end
 
-        function getErrorFigure(obj, ricposdiff, figureInfo)
+        function thisFigure = getErrorFigure(obj, ricposdiff, figureInfo)
             allSteps = (1:size(ricposdiff(:,4))).*(obj.plotStepTime / 60.0);
-            figure()
+            thisFigure = figure();
             subplot(1,4,1:3)
             plot(allSteps, ricposdiff(:,4), 'k', 'LineWidth',5)
             hold on
@@ -1484,7 +1494,6 @@ classdef ssCOD
             %dbeta = (drho_SEZ(1)*rho_SEZ(2)-drho_SEZ(2)*rho_SEZ(1))/temp^2;
 
         end
-
 
         function [GDOP, PDOP, TDOP, HDOP, VDOP] = getGlobeDops(obj, ...
                 initialNoPoints, starConstellation, el_mask, isFigureOn)
@@ -2590,6 +2599,275 @@ classdef ssCOD
             positionECEF = [thisPositionECEF.getX(),thisPositionECEF.getY(),thisPositionECEF.getZ()];
         end
         
+        function displayLinkedSatellites(obj,pointLla, starConstellation, ...
+                        posIntervals, posSpan, mask, step)
+            linkedSatelliteStates = obj.getLinkedSatellites(pointLla, ...
+                starConstellation, posIntervals, posSpan, mask);
+            NoOfIntervals = size(linkedSatelliteStates,2);
+            allStates = linkedSatelliteStates{1,step};
+            allEcef = zeros(size(allStates, 1), 3);
+            allEcef = allStates(:,2:4);
+            if step > NoOfIntervals
+                step = NoOfIntervals;
+            elseif step < 1 
+                step = 1;
+            end
+            pointEcef = obj.llaToEcef(pointLla);
+            geoMap = imread("blue.PNG");
+            figure()
+            [X,Y,Z] = sphere(50);
+            hold on
+            rotate3d
+            axis equal
+            mesh(X.*6378137,Y.*6378137,Z.*6378137,flipud(geoMap),'FaceColor','texturemap',EdgeColor='none')
+            plot3(pointEcef(1), pointEcef(2), pointEcef(3), 'r.','MarkerSize',25)
+            for i = 1:size(allEcef, 1)
+                plot3(allEcef(i, 1), allEcef(i, 2), allEcef(i, 3), 'k.','MarkerSize',25)
+            end
+            axis off
+        end
+    
+        function lgnssEphemeris = getNavigationMessageFromEstimatorPropagator(obj, ...
+                thisPropagator, messageFitInterval)
+            
+            initialDate = thisPropagator.getMinDate();
+            observationTimeStep = 1.0;
+            import org.orekit.utils.*
+            R_e = Constants.WGS84_EARTH_EQUATORIAL_RADIUS;
+            mu = Constants.WGS84_EARTH_MU;
+            trueEphemeris = zeros(floor((messageFitInterval/observationTimeStep)) + 1,7);
+            trueEphemerisEcef = zeros(floor((messageFitInterval/observationTimeStep)) + 1,7);
+            unixTimes = zeros(floor((messageFitInterval/observationTimeStep)) + 1,1);
+            currentDateTime = initialDate;
+            mn = 0;
+            while currentDateTime.compareTo(initialDate.shiftedBy(messageFitInterval)) <=0
+                mn = mn + 1;
+                trueEphemeris(mn , 1) = mn - 1;
+                trueEphemerisEcef(mn , 1) = mn - 1;
+                unixTimes(mn , 1) = obj.getUnixTime(currentDateTime);
+                truePV = thisPropagator.propagate(currentDateTime).getPVCoordinates();
+                trueEphemeris(mn , 2 : 7) = [truePV.getPosition().getX(), truePV.getPosition().getY(), ...
+                    truePV.getPosition().getZ(), truePV.getVelocity().getX(), ...
+                    truePV.getVelocity().getY(), truePV.getVelocity().getZ()];
+
+                truePVEcef = thisPropagator.propagate(currentDateTime).getPVCoordinates(obj.ecefFrame);
+                trueEphemerisEcef(mn , 2 : 7) = [truePVEcef.getPosition().getX(), truePVEcef.getPosition().getY(), ...
+                    truePVEcef.getPosition().getZ(), truePVEcef.getVelocity().getX(), ...
+                    truePVEcef.getVelocity().getY(), truePVEcef.getVelocity().getZ()];
+                currentDateTime = currentDateTime.shiftedBy(observationTimeStep);
+            end
+            if (mn) < size(trueEphemeris , 1)
+                ...
+            end
+            orbit_data.pos_m = trueEphemeris(:,2:4); %ECI
+            orbit_data.vel_m_s = trueEphemeris(:,5:7); %ECI
+            orbit_data.elapsed_time_sec = trueEphemeris(:,1);
+            ICUIS = obj.ECI2COE(trueEphemeris(1,2:4),trueEphemeris(1,5:7));
+            SMA = ICUIS.a; % [m]
+
+            % Fit interval of interest.
+            fit_interval = messageFitInterval; % [seconds]
+
+            % File names.
+            file_altitudes = SMA - R_e; % [km]
+
+            % Total time in file.
+            time_in_file = orbit_data.elapsed_time_sec(end); % [sec]
+
+            % Start the clock.
+            tic;
+
+            % Get the analytical coefficients for the URE equations.
+            [coeff_A2, coeff_C2, coeff_R2, ~, ~, ~] = ...
+                obj.analytic_URE_eqn(  file_altitudes );
+
+            % Determine the message start times.
+            message_start_times = ...
+                0:messageFitInterval:(time_in_file - fit_interval);
+
+            % Determine the number of messages that can be made per file.
+            num_eph_per_file = length( message_start_times );
+
+            % Initialize variables.
+
+            lgnssEphemeris(num_eph_per_file).Asqrt  = [];
+            lgnssEphemeris(num_eph_per_file).e      =[];
+            lgnssEphemeris(num_eph_per_file).i0     =[];
+            lgnssEphemeris(num_eph_per_file).Omega0 =[];
+            lgnssEphemeris(num_eph_per_file).Omega  =[];
+            lgnssEphemeris(num_eph_per_file).M0     =[];
+
+            lgnssEphemeris(num_eph_per_file).Cus    =[];
+            lgnssEphemeris(num_eph_per_file).Cuc    =[];
+            lgnssEphemeris(num_eph_per_file).Crs    =[];
+            lgnssEphemeris(num_eph_per_file).Crc    =[];
+            lgnssEphemeris(num_eph_per_file).Cis    =[];
+            lgnssEphemeris(num_eph_per_file).Cic    =[];
+
+            lgnssEphemeris(num_eph_per_file).IDOT      =[];
+            lgnssEphemeris(num_eph_per_file).Omega_dot =[];
+            lgnssEphemeris(num_eph_per_file).Delta_n   =[];
+            lgnssEphemeris(num_eph_per_file).Toe   =[];
+            lgnssEphemeris(num_eph_per_file).Epoch = [];
+
+            idx_message = 1;
+
+            % Define the time vector for fitting.
+            time = ...
+                orbit_data.elapsed_time_sec(...
+                orbit_data.elapsed_time_sec <= fit_interval );
+
+            % Get the start / end index for the data to fit to.
+            idx_start = find(orbit_data.elapsed_time_sec == ...
+                message_start_times(idx_message));
+            idx_end = find(orbit_data.elapsed_time_sec == ...
+                message_start_times(idx_message) + fit_interval);
+
+            % Get position and velocity vectors
+            pos = ...
+                orbit_data.pos_m(idx_start:idx_end,:);
+            vel = ...
+                orbit_data.vel_m_s(idx_start:idx_end,:);
+
+            theta_g = obj.utc2gmst( datevec(unixTimes(1)) ); % [rad]
+
+            % Form initial guess with the 6 Keplerian elements.
+            [coe, ~, ~] = obj.ECI2COE(trueEphemeris(1,2:4),trueEphemeris(1,5:7));
+
+            % Form the initial guess for the estimator.
+            a = coe.a; % [m]
+            n = sqrt(mu/a^3); % [rad/sec]
+            ecc = coe.e; % [-]
+            inc = coe.i * pi / 180; % [rad]
+            RAAN = coe.RAAN * pi / 180; % [rad]
+            omega = coe.omega * pi /180; % [rad]
+            M0 = coe.M * pi / 180; % [rad]
+
+            Cus = 0; % [rad]
+            Cuc = 0; % [rad]
+            Crs = 0; % [rad]
+            Crc = 0; % [rad]
+            Cis = 0; % [rad]
+            Cic = 0; % [rad]
+
+            IDOT = 0; % [rad/s]
+            OMEGA_DOT = 0; % [rad/s]
+            delta_n = 0; % [rad/s]
+
+            % Form the initial guess.
+            initial_guess(1) = a;
+            initial_guess(2) = ecc;
+            initial_guess(3) = inc;
+            initial_guess(4) = RAAN;
+            initial_guess(5) = omega;
+            initial_guess(6) = M0;
+
+            initial_guess(7)  = Cus;
+            initial_guess(8)  = Cuc;
+            initial_guess(9)  = Crs;
+            initial_guess(10) = Crc;
+            initial_guess(11) = Cis;
+            initial_guess(12) = Cic;
+
+            initial_guess(13) = IDOT;
+            initial_guess(14) = OMEGA_DOT;
+            initial_guess(15) = delta_n;
+
+            % Define the convergence criteria.
+            ConvCrit = 1e-11;
+
+            % Fit ephemeris parameters or subset.
+            % Define the weighting matrix, use the identity matrix for now.
+            Wmat = ones( size(time) );
+
+            fit_parameters = ones(1,15);
+
+            % Fit parameters.
+            [a, ecc, inc, RAAN, omega, M0,...
+                Cus, Cuc, Crs, Crc, Cis, Cic, ...
+                IDOT, OMEGA_DOT, delta_n, ~, ~, ~] = ...
+                obj.COE15_estimator_wrapper(time, pos, vel, initial_guess, ...
+                Wmat, ConvCrit, fit_parameters, ...
+                theta_g, coeff_R2, coeff_A2, coeff_C2);
+
+            % Error analysis.
+            [~, ~, ~, ...
+                ~, ~, ~, ...
+                lgnssEphemeris] = obj.eph_error_analysis(sqrt(a), ecc, inc, RAAN, omega, M0, ...
+                Cus, Cuc, Crc, Crs, Cic, Cis, ...
+                IDOT, OMEGA_DOT, delta_n, time, pos, vel, theta_g, ...
+                coeff_R2, coeff_A2, coeff_C2);
+            lgnssEphemeris(num_eph_per_file).Epoch = initialDate;
+        end
+
+        function saveRICError(obj, mainScenarioData, orb, closeStat)
+            ricposdiff = obj.getRICPositionDifference(mainScenarioData(orb).realPropagator,...
+                mainScenarioData(orb).estimatedPropagator);
+            figureInfo = obj.getFigureTitle(mainScenarioData(orb).linkList(1));
+            thisFigureName = ['thisFigureCaseNo' num2str(orb) '.fig'];
+            thisFigure = obj.getErrorFigure(ricposdiff, figureInfo);
+            saveas(thisFigure, thisFigureName)
+            if closeStat
+                close(thisFigure)
+            end
+        end
+
+
+        function positionErrors = getUserPositioningError(obj, ...
+                inputStructure, linkedSatelliteStates, mainScenarioData)
+            pointLla = inputStructure.underPositioningPoint;
+            posSpan = inputStructure.positioningTimeSpanInHours;
+            posIntervals = inputStructure.positioningIntervals;
+            pointEcef = obj.llaToEcef(pointLla);
+            if posSpan*3600.0 > 30.0 * 60.0
+                positionErrors = [];
+                return
+            end
+            positionErrors = zeros(posIntervals + 1, 4);
+
+            PsuedoRangeAndEcef = cell(1, posIntervals + 1);
+            intervalsDuration = (posSpan*3600.0/(posIntervals + 1));
+            for i = 1:posIntervals + 1
+                linkedStates = linkedSatelliteStates{1,i};
+                if isempty(linkedStates)
+                else
+                    indexArray = linkedStates(:,1);
+                    states = zeros(size(indexArray,1), 4);
+                    for j = 1:size(indexArray,1)
+                        for z = 1:size(mainScenarioData,2)
+                            if indexArray(j) == mainScenarioData(z).underODSatellite
+                                EphemerisMessage = mainScenarioData(z).lgnssEphemeris;
+                                break
+                            end
+                        end
+                        states(j,1:3) = obj.getEcefFromNavigationMessage(EphemerisMessage, intervalsDuration*(i-1));
+                        states(j,4) = norm(states(j,1:3) - pointEcef) - 0.87 + (1.7334)*rand(1,1);
+                    end
+                    PsuedoRangeAndEcef{1,i} = states;
+                end
+            end
+
+            for i = 1:posIntervals + 1
+                linkedStates = PsuedoRangeAndEcef{1,i};
+                if isempty(linkedStates)
+                elseif size(linkedStates, 1) < 4
+                else
+                    positions = linkedStates(:,1:3)'; % u were here
+                    ranges = linkedStates(:, 4)';
+                    weights = diag(ones(1,length(ranges)));
+                    [N1,~] = obj.trilateration(positions, ranges, weights);
+                    estimatedPosition = N1(2:4,1)';
+                    positionErrors(i,1:3) = estimatedPosition - pointEcef;
+                    positionErrors(i,4) = norm(estimatedPosition - pointEcef);
+                end
+            end
+
+
+        end
+
+
+
+
     end
 
 end
