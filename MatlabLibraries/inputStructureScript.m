@@ -18,7 +18,7 @@ inputStructure.orbitPregeeArgument = 0.0; % in [deg]
 inputStructure.orbitRaan = 0.0; % in [deg]
 inputStructure.orbitTrueAnomaly = 0.0; % in [deg]
 inputStructure.constellationConfiguration = [420, 15, 1];
-inputStructure.underOdSatellite = 200;
+inputStructure.underOdSatellite = 367;
 
 inputStructure.underPositioningPoint = [35, 51, 0];
 inputStructure.positioningTimeSpanInHours = 0.0167;
@@ -52,15 +52,15 @@ inputStructure.noiseSeed = 1;
 inputStructure.gpsSampleTime = 1.0;    % Observation parameter
 inputStructure.gpsSigma = 1.8;         % filter parameter
 inputStructure.gpsBaseWeight = 1.0;    % filter parameter
-inputStructure.gpsPositionStd = 33.34; % GPS Position Error ~ 3-sigma [m]
-inputStructure.gpsVelocitystd = 0.334;   % GPS Velocity Error ~ 3-sigma [m/s]
+inputStructure.gpsPositionStd = 20.34; % GPS Position Error ~ 3-sigma [m]
+inputStructure.gpsVelocitystd = 0.2;   % GPS Velocity Error ~ 3-sigma [m/s]
 
 inputStructure.isISL = true;
 inputStructure.islLink = 'G01';
 inputStructure.islSigma = 1e-4;      % filter parameter
 inputStructure.islBaseWeight = 4.0;    % filter parameter
 inputStructure.isTwoWay = true;        % Observation parameter
-inputStructure.islSampleTime = 0.1;   % Observation parameter
+inputStructure.islSampleTime = 1.0;   % Observation parameter
 inputStructure.islScheduler = 'Continouos'; % alternative 'InView'
 inputStructure.islStd = 1e-4;        % Environment parameter
 %%
@@ -87,7 +87,12 @@ posIntervals = inputStructure.positioningIntervals;
 % mainScenario.displayConstellationConfiguration(starConstellation);
 % positionErrors = mainScenario.getUserErrorSingleMessage( [31, 51, 0], starConstellation, 14, 0.2, 5.0);
 % mainScenario.displayActiveSatellitesConfiguration(activeSatellites, selectedOrbitsIndexes, linkList);
-% lgnssEphemeris = mainScenario.getNavigationMessage(starConstellation(1), 900);
+% lgnssEphemeris = [];
+% a = [10;11;12;337;338;339;364;365;366;367;392;393;394;395;420];
+% for j = 1: size(a,1)
+% lgnssEphemerisTemp = mainScenario.getNavigationMessage(starConstellation(a(j)), 900);
+% lgnssEphemeris = [lgnssEphemeris; lgnssEphemerisTemp];
+% end
 % ephemerisError = mainScenario.getLgnssError(lgnssEphemeris, starConstellation(1),...
 %     0.25, 1);
 %%

@@ -21,8 +21,8 @@ inputStructure.constellationConfiguration = [420, 15, 1];
 inputStructure.underOdSatellite = 200;
 
 inputStructure.underPositioningPoint = [35, 51, 0];
-inputStructure.positioningTimeSpanInHours = 0.1;
-inputStructure.positioningIntervals = 359;
+inputStructure.positioningTimeSpanInHours = 0.05;
+inputStructure.positioningIntervals = 179;
 inputStructure.maskAngle = 5; % [deg]
 
 % Orbit propagator parameters
@@ -60,7 +60,7 @@ inputStructure.islLink = 'G01';
 inputStructure.islSigma = 1e-4;      % filter parameter
 inputStructure.islBaseWeight = 4.0;    % filter parameter
 inputStructure.isTwoWay = true;        % Observation parameter
-inputStructure.islSampleTime = 0.1;   % Observation parameter
+inputStructure.islSampleTime = 1.0;   % Observation parameter
 inputStructure.islScheduler = 'Continouos'; % alternative 'InView'
 inputStructure.islStd = 1e-4;        % Environment parameter
 %%
@@ -80,8 +80,11 @@ posIntervals = inputStructure.positioningIntervals;
 % mainScenario.displayLinkedSatellites(pointLla, starConstellation, ...
 %     posIntervals, posSpan, mask, 2);
 
-linkedSatelliteStates = mainScenario.getLinkedSatellites(pointLla, ...
-    starConstellation, posIntervals, posSpan, mask);
+a = load('testLinked.mat');
+linkedSatelliteStates =  a.linkedSatelliteStates;
+
+% linkedSatelliteStates = mainScenario.getLinkedSatellites(pointLla, ...
+%     starConstellation, posIntervals, posSpan, mask);
 
 % mainScenario.displayConstellationConfiguration(starConstellation);
 % positionErrors = mainScenario.getUserErrorSingleMessage( [31, 51, 0], starConstellation, 14, 0.2, 5.0);
@@ -156,13 +159,13 @@ for j = 1 :NoOfUnderOdOrbits
 
     mainScenarioData(j).underODSatellite = underODSatellite;
     mainScenarioData(j).linkList = linkList;
-    mainScenarioData(j).underODOrbit = underODOrbit;
-    mainScenarioData(j).allOrbits = allOrbits;
-    mainScenarioData(j).linkedOrbits = linkedOrbits;
-    mainScenarioData(j).linkedPropagators = linkedPropagators;
-    mainScenarioData(j).propBuilder = propBuilder;
-    mainScenarioData(j).estimator = thisEstimator;
-    mainScenarioData(j).estimatorOutput = estimatorOutput;
+    % mainScenarioData(j).underODOrbit = underODOrbit;
+    % mainScenarioData(j).allOrbits = allOrbits;
+    % mainScenarioData(j).linkedOrbits = linkedOrbits;
+    % mainScenarioData(j).linkedPropagators = linkedPropagators;
+    % mainScenarioData(j).propBuilder = propBuilder;
+    % mainScenarioData(j).estimator = thisEstimator;
+    % mainScenarioData(j).estimatorOutput = estimatorOutput;
     mainScenarioData(j).estimatedPropagator = estimatedPropagator;
     mainScenarioData(j).realPropagator = realPropagator;
     mainScenarioData(j).lgnssEphemeris = lgnssEphemeris;

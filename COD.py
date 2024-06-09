@@ -892,7 +892,7 @@ class MyObserver(PythonBatchLSObserver):
 mainScenario = ssEnvironmentBuilder()
 duration = mainScenario.duration
 mainScenario.addReferenceOrbit(700000.0, 0.0, 89.46, 0.0, 0.0, 0.0)
-#mainScenario.feedGroundStations(["Tabriz", "Boushehr", "Bandar Abbas", "Mashhad"])
+mainScenario.feedGroundStations(["Tabriz", "Boushehr", "Bandar Abbas", "Mashhad"])
 
 underODSatellites = [100]
 starConstellation, activeSatellites, selectedOrbitsIndexes, linkList = \

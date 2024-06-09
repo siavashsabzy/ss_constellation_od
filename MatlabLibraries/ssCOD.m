@@ -691,6 +691,7 @@ classdef ssCOD
             import org.hipparchus.linear.*;
             import org.hipparchus.optim.nonlinear.vector.leastsquares.*;
             import org.orekit.estimation.leastsquares.*;
+            import org.orekit.estimation.*;
             matrixDecomposer = QRDecomposer(1e-11);
             optimizer = GaussNewtonOptimizer(matrixDecomposer, false);
             satEstimator = BatchLSEstimator(optimizer, propagatorBuilder);
@@ -712,9 +713,21 @@ classdef ssCOD
                 end
                 fprintf("%1.0f measurements added to estimator \n",i);
             else
-                fprintf("%1.0f measurements added to estimator \n",0);
-                fprintf("Not implemented yet \n");
-                % Not implemented yet
+                for j = 1:obj.numberOfGroundStation
+                    station = obj.groundStationsList(j);
+                    stationName = obj.groundStationsList(j).getBaseFrame().getName();
+                    altitude = obj.groundStationsList(j).getBaseFrame().getPoint().getAltitude();
+                    meas = obj.generateMeasurements(allOrbits, station, stationName, altitude, ...
+                        obj.elevationMask, measurementsType, ...
+                        startTime, duration, obj.eciFrame, []);
+                    i = 0;
+                    for m = 1 : size(meas)
+                        estimator.addMeasurement(meas(m));
+                        i = i + 1;
+                    end
+                    fprintf("%1.0f measurements added to estimator \n",i);
+                end
+
             end
         end
 
@@ -1040,6 +1053,8 @@ classdef ssCOD
             import org.orekit.estimation.measurements.generation.*;
             import org.orekit.gnss.*;
             import org.orekit.propagation.events.*;
+            import org.orekit.models.earth.*;
+            import org.orekit.propagation.events.handlers.*;
             two_way = obj.stationisTwoWay;
             withRefraction = obj.stationRefractio;
             step = obj.stationSampleTime;
@@ -1052,7 +1067,8 @@ classdef ssCOD
                 generator.addSubscriber(gatherer);
                 for proIndex2 = 1:size(allOrbits,1)
                     if proIndex2 == proIndex
-                        satellite = generator.addPropagator(obj.getPropagator("Get", allOrbits(proIndex2), "H"));
+                        theODp = obj.getPropagator("Get", allOrbits(proIndex2), "H");
+                        satellite = generator.addPropagator(theODp);
                     else
                         generator.addPropagator(obj.getPropagator("Get", allOrbits(proIndex2), "H"));
                     end
@@ -1063,7 +1079,9 @@ classdef ssCOD
                 small = 1e-10;
                 random_generator = Well19937a(seed);
                 gaussian_generator = GaussianRandomGenerator(random_generator);
-                covariance = MatrixUtils.createRealDiagonalMatrix([(sigma * sigma), (sigma * sigma)]);
+                covariance = MatrixUtils.createRealDiagonalMatrix(...
+                    [(obj.stationStd * obj.stationStd), ...
+                    (obj.stationStd * obj.stationStd)]);
                 noise_source = CorrelatedRandomVectorGenerator(covariance, small, gaussian_generator);
                 if strcmpi(meas_type,'RANGE')
                     builder = RangeBuilder(noise_source, station, two_way, sigma, base_weight, satellite);
@@ -1097,7 +1115,7 @@ classdef ssCOD
                             ContinueOnEvent());
                     end
                     scheduler = EventBasedScheduler(builder, fixed_step_selector, ...
-                        obj.getPropagator("Get", allOrbits(proIndex2), "H"), ...
+                        theODp, ...
                         elevation_detector,...
                         SignSemantic.FEASIBLE_MEASUREMENT_WHEN_POSITIVE);
                     generator.addScheduler(scheduler);
@@ -2812,7 +2830,6 @@ classdef ssCOD
             end
         end
 
-
         function positionErrors = getUserPositioningError(obj, ...
                 inputStructure, linkedSatelliteStates, mainScenarioData)
             pointLla = inputStructure.underPositioningPoint;
@@ -2865,8 +2882,49 @@ classdef ssCOD
 
         end
 
+        function  obj = addGroundStation(obj, latitude, longitude, altitude, name)
+            import org.orekit.bodies.*;
+            import org.orekit.frames.*;
+            import org.orekit.estimation.measurements.*;
+            stationPoint = GeodeticPoint(latitude * obj.DEG2RAD, longitude * obj.DEG2RAD, altitude);
+            stationFrame = TopocentricFrame(obj.wgs84Ellipsoid, stationPoint, name);
+            groundStation = GroundStation(stationFrame);
+            obj.groundStationsList = [obj.groundStationsList; groundStation];
+            obj.numberOfGroundStation = obj.numberOfGroundStation + 1;
+        end
 
+        function obj = feedGroundStations(obj, names)
+            addedGroundStations = [];
+            for i = 1:size(names,2)
+                if strcmpi(names(i),"Boushehr")
+                    obj = obj.addGroundStation(30.0, 48.5, 0.0, "Boushehr");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                elseif strcmpi(names(i),"Tehran")
+                    obj = obj.addGroundStation(35.0, 51.0, 0.0, "Tehran");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                elseif strcmpi(names(i),"Aleshtar")
+                    obj = obj.addGroundStation(33.0, 48.0, 1500.0, "Aleshtar");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                elseif strcmpi(names(i),"Bandar Abbas")
+                    obj = obj.addGroundStation(25.0, 59.0, 0.0, "Bandar Abbas");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                elseif strcmpi(names(i),"Mashhad")
+                    obj = obj.addGroundStation(35.0, 58.0, 0.0, "Mashhad");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                elseif strcmpi(names(i),"Tabriz")
+                    obj = obj.addGroundStation(38.0, 46.0, 0.0, "Tabriz");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                elseif strcmpi(names(i),"Sistan")
+                    obj = obj.addGroundStation(27.0, 63.0, 0.0, "Sistan");
+                    addedGroundStations = [addedGroundStations; names(i)];
+                else
+                    pass
+                end
+                % print(" ")
+                % print("added Ground Stations ({}): {}".format(len(addedGroundStations), addedGroundStations))
 
+            end
+        end
 
     end
 
