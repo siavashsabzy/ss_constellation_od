@@ -1,2 +1,2 @@
-# Station + GNSS Orbit Determination using orekit in python
+# Station + GNSS Orbit Determination of satellite constellation using orekit in python
 code discription will be added in the future.
